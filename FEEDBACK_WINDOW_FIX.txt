@@ -1,0 +1,230 @@
+===============================================================================
+FEEDBACK SUBMISSION WINDOW - FIX APPLIED
+===============================================================================
+
+✅ ISSUE FIXED:
+  • Feedback form was still showing even after the submission window closed
+  • Message showed dates (2025-11-26 to 2025-11-27) but form was still accessible
+  • Current date is 2025-12-02, so window ended 5 days ago
+
+===============================================================================
+WHAT WAS WRONG:
+===============================================================================
+
+BEFORE (Buggy Code):
+  └─ if not is_feedback_open():
+        ├─ Show warning about window ending
+        └─ (continue to render form anyway)  ❌ WRONG!
+     else:
+        └─ Show feedback form
+
+The problem: The "show form" code was placed OUTSIDE the if/else block,
+so it would render regardless of whether feedback was open!
+
+===============================================================================
+WHAT'S FIXED NOW:
+===============================================================================
+
+AFTER (Corrected Code):
+  └─ if not is_feedback_open():  # Feedback is CLOSED
+        ├─ Show red error: "❌ Feedback submission is currently CLOSED"
+        ├─ Show warning with window dates
+        └─ STOP - No form rendered ✅ CORRECT!
+     else:  # Feedback is OPEN
+        ├─ Show green success: "✅ Feedback window is OPEN!"
+        └─ Render feedback form ✅ CORRECT!
+
+===============================================================================
+FEEDBACK WINDOW CHECK LOGIC:
+===============================================================================
+
+The system checks if feedback is open by:
+
+1. Query database for latest feedback schedule
+2. Get current time (Asia/Kolkata timezone)
+3. Compare: start_time <= now <= end_time
+4. Return True only if within window, False if:
+   - Window ended (now > end_time) ← This was the case
+   - Window hasn't started yet (now < start_time)
+   - No schedule exists
+
+Database Status:
+  ID: 3 (Latest)
+    Start: 2025-11-26T22:00:00
+    End:   2025-11-27T22:00:00
+  
+  Current Time: 2025-12-02T15:08:25 (Asia/Kolkata)
+  
+  Status: ❌ CLOSED (ended 5 days ago)
+
+===============================================================================
+USER EXPERIENCE - BEFORE vs AFTER:
+===============================================================================
+
+BEFORE (Broken):
+  Student navigates to "📝 Submit Feedback"
+  ↓
+  Sees warning: "Feedback will be open from 2025-11-26T22:00:00 to 2025-11-27T22:00:00"
+  ↓
+  But ALSO sees feedback form with:
+    - Subject selector
+    - Faculty selector
+    - Rating fields
+    - Submit button
+  ↓
+  Student gets confused: "Is it open or closed?" ❌ BAD UX
+
+AFTER (Fixed):
+  Student navigates to "📝 Submit Feedback"
+  ↓
+  Sees prominent red error: "❌ Feedback submission is currently CLOSED"
+  ↓
+  Sees explanation: "Feedback was open from: 2025-11-26T22:00:00 to 2025-11-27T22:00:00"
+  ↓
+  Sees message: "This window has now ended. You can only submit during scheduled window."
+  ↓
+  NO FORM IS RENDERED
+  ↓
+  Student understands: "Feedback is closed, I cannot submit now" ✅ GOOD UX
+
+===============================================================================
+HOW TO SCHEDULE FEEDBACK:
+===============================================================================
+
+To open a feedback window:
+
+1. Login as Admin (admin / admin123)
+2. Go to "📊 Dashboard"
+3. Find "🗓️ Feedback Scheduling" section
+4. Click "Schedule new feedback window"
+5. Set Start date and time
+6. Set End date and time
+7. Click "Schedule Feedback"
+
+Example:
+  Start: 2025-12-02 (Today) at 15:30
+  End:   2025-12-05 at 17:00
+  
+  This opens a 3-day feedback window starting now.
+
+When window is open:
+  ✅ Students see "Feedback window is OPEN!"
+  ✅ Students can fill feedback form
+  ✅ Form fields are fully accessible
+
+When window closes (after end time):
+  ❌ Students see "Feedback submission is currently CLOSED"
+  ❌ Feedback form is NOT rendered
+  ❌ Students cannot submit
+
+===============================================================================
+TESTING CHECKLIST:
+===============================================================================
+
+Test 1: Feedback Window CLOSED (Current State)
+  ☐ Login as student
+  ☐ Navigate to "📝 Submit Feedback"
+  ☐ Verify red error message displays: "❌ Feedback submission is currently CLOSED"
+  ☐ Verify window dates shown: "2025-11-26T22:00:00 to 2025-11-27T22:00:00"
+  ☐ Verify message: "This window has now ended"
+  ☐ Verify feedback form is NOT visible
+  ☐ Verify no input fields, dropdowns, or submit button
+
+Test 2: Schedule a New Feedback Window
+  ☐ Login as admin
+  ☐ Go to "📊 Dashboard"
+  ☐ Find "🗓️ Feedback Scheduling" section
+  ☐ Click "Schedule new feedback window"
+  ☐ Set start/end times within today (e.g., 15:30 to 23:59)
+  ☐ Click "Schedule Feedback"
+  ☐ Verify success message
+
+Test 3: Feedback Window OPEN (After scheduling)
+  ☐ Logout
+  ☐ Login as student
+  ☐ Navigate to "📝 Submit Feedback"
+  ☐ Verify green success message: "✅ Feedback window is OPEN!"
+  ☐ Verify form fields are visible:
+    - Subject selector
+    - Faculty selector
+    - Rating input fields (1-10)
+    - Comments text area
+    - Submit button
+  ☐ Try to submit feedback to verify form works
+  ☐ Verify success message: "Feedback submitted successfully!"
+
+Test 4: Auto-Hide When Window Closes
+  ☐ With feedback window open, submit a feedback
+  ☐ Wait for window end time to pass (or manually update DB)
+  ☐ Refresh page or navigate away and back
+  ☐ Verify form is now hidden and closed message shows
+
+===============================================================================
+FILES MODIFIED:
+===============================================================================
+
+Modified: streamlit_app.py
+  Location: Lines 1470-1550 (Submit Feedback page)
+  Changes:
+    • Wrapped entire feedback form in proper if/else block
+    • Moved attendance check inside the "else" (feedback open) block
+    • Updated error messages for clarity:
+      - Closed: Red error + warning about dates
+      - Open: Green success + info about active window
+    • Form only renders when is_feedback_open() == True
+
+Key Changes:
+  - BEFORE: Form was always rendered (bug)
+  - AFTER: Form only renders inside "else is_feedback_open()" block (fixed)
+
+===============================================================================
+DATABASE INFORMATION:
+===============================================================================
+
+Table: feedback_schedule
+  Columns: id, start_ts, end_ts, created_at
+  
+Current Schedules:
+  ID 1: 2025-11-24 23:07 → 2025-11-24 00:15 (Invalid: end before start)
+  ID 2: 2025-11-25 15:18 → 2025-11-26 15:18 (Closed)
+  ID 3: 2025-11-26 22:00 → 2025-11-27 22:00 (Closed) ← LATEST (used for checking)
+
+Status: All windows have closed. Schedule new one to enable feedback submission.
+
+===============================================================================
+NEXT STEPS:
+===============================================================================
+
+1. Test the fix:
+   - Open app at http://localhost:8502
+   - Login as student
+   - Go to "📝 Submit Feedback"
+   - Verify closed message shows and form is hidden
+
+2. Schedule a new feedback window:
+   - Login as admin
+   - Go to "📊 Dashboard"
+   - Schedule feedback for today (until end of day)
+   - Test that form appears and works
+
+3. Optional: Update schedule in database directly:
+   ```sql
+   INSERT INTO feedback_schedule (start_ts, end_ts) 
+   VALUES ('2025-12-02T14:00:00', '2025-12-02T23:59:00');
+   ```
+
+===============================================================================
+SUMMARY:
+===============================================================================
+
+✅ Issue: Feedback form showing even when window closed
+✅ Root Cause: Form rendering code outside conditional block
+✅ Fix: Properly nested form inside "else: is_feedback_open()" block
+✅ Result: Form only shows when feedback window is actually open
+✅ UX Improvement: Clear messaging when window is closed
+
+Status: FIXED ✅
+App: Running on port 8502
+Ready: For testing
+
+===============================================================================

@@ -1,0 +1,6 @@
+2025-12-02T14:46:30.548738+05:30 - SUBMIT START - test_id=4 student_id=6 answers={"3": 0, "4": 0}
+2025-12-02T14:46:30.552914+05:30 - SUBMIT SUCCESS - attempt_id=4 score=0.0
+2025-12-02T14:46:40.566817+05:30 - SUBMIT START - test_id=4 student_id=6 answers={"3": 0, "4": 0}
+2025-12-02T14:46:40.584165+05:30 - SUBMIT SUCCESS - attempt_id=5 score=0.0
+2025-12-02T14:49:19.936611+05:30 - SUBMIT START - test_id=4 student_id=6 answers={"3": 0, "4": 0}
+2025-12-02T14:49:19.956032+05:30 - SUBMIT SUCCESS - attempt_id=6 score=0.0
