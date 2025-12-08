@@ -34,6 +34,14 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, 
 from reportlab.lib import colors
 from io import BytesIO
 
+# Support for external database (use DATABASE_URL env var for hosted DB)
+# If not provided, the app will use local SQLite file `feedback_streamlit.db`.
+# NOTE: On Streamlit Community Cloud the application filesystem is ephemeral
+# and local SQLite files are not persisted across app restarts or redeploys.
+# To persist data in production, configure a hosted database and set
+# the `DATABASE_URL` environment variable (e.g. Postgres URI).
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
 def generate_application_documentation():
     """Generate a comprehensive PDF documentation of the application."""
     buffer = BytesIO()
@@ -1557,6 +1565,13 @@ if 'logged_in' not in st.session_state:
 with st.sidebar:
     # Sidebar title kept concise now (main header moved to main page)
     st.title("🎓 VVPIET Student LMS")
+    # Persistence warning for Streamlit Community Cloud deployments
+    if not DATABASE_URL:
+        st.warning(
+            "Using local SQLite database (`feedback_streamlit.db`).\n"
+            "On Streamlit Community Cloud this storage is ephemeral: registered users and uploads may disappear after app restarts or redeploys.\n"
+            "To persist data across restarts, configure an external database (e.g., Postgres) and set the `DATABASE_URL` environment variable in your app settings."
+        )
     
     if st.session_state.logged_in:
         st.success(f"Logged in as: **{st.session_state.username}** ({st.session_state.role})")
