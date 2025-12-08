@@ -245,9 +245,72 @@ def generate_application_documentation():
 # Database setup
 DB_PATH = "feedback_streamlit.db"
 
+# Database connection helper
+# If `DATABASE_URL` environment variable is set (Postgres URI), the app will connect
+# to Postgres via psycopg2 and provide a thin cursor wrapper that accepts `?` placeholders
+# (converted to `%s` for psycopg2). Otherwise it uses local sqlite3.
+def db_connect():
+    """Return a DB-API connection. Uses Postgres if DATABASE_URL is set, else SQLite."""
+    if DATABASE_URL:
+        try:
+            import psycopg2
+        except Exception:
+            raise RuntimeError("psycopg2 is required when DATABASE_URL is set. Add psycopg2-binary to requirements.txt")
+
+        class PGCursorWrapper:
+            def __init__(self, cur):
+                self._cur = cur
+
+            def execute(self, query, params=None):
+                if params is None:
+                    return self._cur.execute(query)
+                # Convert sqlite-style ? placeholders to psycopg2 %s
+                q = query.replace('?', '%s')
+                return self._cur.execute(q, params)
+
+            def executemany(self, query, seq_of_params):
+                q = query.replace('?', '%s')
+                return self._cur.executemany(q, seq_of_params)
+
+            def fetchall(self):
+                return self._cur.fetchall()
+
+            def fetchone(self):
+                return self._cur.fetchone()
+
+            def close(self):
+                return self._cur.close()
+
+            @property
+            def rowcount(self):
+                return self._cur.rowcount
+
+        class PGConnWrapper:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def cursor(self):
+                return PGCursorWrapper(self._conn.cursor())
+
+            def commit(self):
+                return self._conn.commit()
+
+            def close(self):
+                return self._conn.close()
+
+            def rollback(self):
+                return self._conn.rollback()
+
+        # Connect to Postgres; enforce ssl if present in environment
+        conn = psycopg2.connect(DATABASE_URL)
+        return PGConnWrapper(conn)
+    else:
+        # SQLite for local development; allow multithreaded access
+        return sqlite3.connect(DB_PATH, check_same_thread=False)
+
 def init_database():
     """Initialize SQLite database with all tables."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     
     # Users table
@@ -488,7 +551,7 @@ def init_database():
     conn.close()
 
     # Ensure feedback table exists with up to 10 question columns (backfill/alter for older DBs)
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS feedback (
@@ -548,7 +611,7 @@ def reset_user_password_with_roll(username, roll_number, new_password):
     Returns True on success, False otherwise."""
     if not username or not roll_number or not new_password:
         return False
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     try:
         cursor.execute('SELECT id FROM users WHERE username = ? AND roll_number = ? AND role = ?', (username, roll_number, 'student'))
@@ -602,7 +665,7 @@ def safe_rerun():
 
 def verify_login(username, password):
     """Verify user login credentials."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('SELECT id, role FROM users WHERE username = ? AND password = ?',
                   (username, hash_password(password)))
@@ -612,7 +675,7 @@ def verify_login(username, password):
 
 def get_faculty_list():
     """Get all faculty members."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('SELECT id, name, department, year_level FROM faculty ORDER BY name')
     faculties = cursor.fetchall()
@@ -622,7 +685,7 @@ def get_faculty_list():
 
 def get_branches():
     """Return distinct engineering branches (department values)."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute("SELECT DISTINCT department FROM faculty WHERE department IS NOT NULL ORDER BY department")
     branches = [row[0] for row in cursor.fetchall()]
@@ -637,7 +700,7 @@ def get_year_levels():
 
 def get_faculties_by_branch(branch):
     """Get faculties filtered by branch/department."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('SELECT id, name, department, year_level FROM faculty WHERE department = ? ORDER BY name', (branch,))
     faculties = cursor.fetchall()
@@ -647,7 +710,7 @@ def get_faculties_by_branch(branch):
 
 def get_faculties_by_year(year_level):
     """Get faculties filtered by year level."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('SELECT id, name, department, year_level FROM faculty WHERE year_level = ? ORDER BY name', (year_level,))
     faculties = cursor.fetchall()
@@ -657,7 +720,7 @@ def get_faculties_by_year(year_level):
 
 def get_faculties_by_branch_and_year(branch, year_level):
     """Get faculties filtered by both branch and year level."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     # Check faculty_year_level table for year level assignment
     cursor.execute('''
@@ -673,7 +736,7 @@ def get_faculties_by_branch_and_year(branch, year_level):
 
 
 def get_subjects_by_year(year_level):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('SELECT id, name, year_level, department, code FROM subjects WHERE year_level = ? ORDER BY name', (year_level,))
     rows = cursor.fetchall()
@@ -682,7 +745,7 @@ def get_subjects_by_year(year_level):
 
 
 def get_faculties_by_subject(subject_id, branch=None, year_level=None):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     query = '''
         SELECT DISTINCT fac.id, fac.name, fac.department, fac.year_level
@@ -707,7 +770,7 @@ def get_faculties_by_subject(subject_id, branch=None, year_level=None):
 
 def update_faculty_year_level(faculty_id, new_year_level):
     """Update faculty's primary year level."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('UPDATE faculty SET year_level = ? WHERE id = ?', (new_year_level, faculty_id))
     conn.commit()
@@ -715,7 +778,7 @@ def update_faculty_year_level(faculty_id, new_year_level):
 
 def add_faculty_year_level(faculty_id, year_level):
     """Add a year level assignment to faculty."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     try:
         cursor.execute('INSERT INTO faculty_year_level (faculty_id, year_level) VALUES (?, ?)', 
@@ -727,7 +790,7 @@ def add_faculty_year_level(faculty_id, year_level):
 
 def get_faculty_year_levels(faculty_id):
     """Get all year levels a faculty teaches."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('SELECT year_level FROM faculty_year_level WHERE faculty_id = ? ORDER BY year_level', 
                   (faculty_id,))
@@ -737,7 +800,7 @@ def get_faculty_year_levels(faculty_id):
 
 def remove_faculty_year_level(faculty_id, year_level):
     """Remove a year level assignment from faculty."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('DELETE FROM faculty_year_level WHERE faculty_id = ? AND year_level = ?', 
                   (faculty_id, year_level))
@@ -746,7 +809,7 @@ def remove_faculty_year_level(faculty_id, year_level):
 
 def get_all_faculty():
     """Get all faculty with their details."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('SELECT id, name, department, year_level FROM faculty ORDER BY name')
     rows = cursor.fetchall()
@@ -771,7 +834,7 @@ def calculate_credit_progress(completed, semester, required):
 
 def add_faculty_resource(faculty_id, subject_id, resource_type, filename, file_path, deadline=None):
     """Insert a new assignment or notes resource."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     try:
         cursor.execute('''
@@ -788,7 +851,7 @@ def add_faculty_resource(faculty_id, subject_id, resource_type, filename, file_p
 
 def get_faculty_resources(faculty_id, subject_id=None, resource_type=None):
     """Get resources uploaded by a faculty member."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     query = 'SELECT id, subject_id, resource_type, filename, uploaded_at, deadline FROM faculty_resources WHERE faculty_id = ?'
     params = [faculty_id]
@@ -806,7 +869,7 @@ def get_faculty_resources(faculty_id, subject_id=None, resource_type=None):
 
 def get_subject_resources_for_student(year_level, department, resource_type=None):
     """Get resources (assignments/notes) for a student's year level and department."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     query = '''
         SELECT fr.id, fr.filename, fr.resource_type, s.name, f.name, fr.uploaded_at, fr.deadline
@@ -827,7 +890,7 @@ def get_subject_resources_for_student(year_level, department, resource_type=None
 
 def delete_subject(subject_id):
     """Delete a subject and its faculty_subject mappings."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     try:
         cursor.execute('DELETE FROM faculty_subject WHERE subject_id = ?', (subject_id,))
@@ -841,7 +904,7 @@ def delete_subject(subject_id):
 
 def submit_feedback(student_name, faculty_id, subject_id, year_level, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, overall, comments):
     """Submit feedback to database with subject tracking (stores up to 10 question ratings)."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO feedback (student_name, faculty_id, subject_id, year_level, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, overall_rating, comments)
@@ -853,7 +916,7 @@ def submit_feedback(student_name, faculty_id, subject_id, year_level, q1, q2, q3
 
 def get_all_feedback():
     """Get all feedback with faculty names and the specific subject feedback was about."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('''
          SELECT f.id, f.created_at, fac.name, fac.department, fac.year_level, f.student_name,
@@ -870,7 +933,7 @@ def get_all_feedback():
 
 def get_faculty_stats():
     """Get statistics by faculty."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('''
         SELECT fac.name, fac.department, fac.year_level, COUNT(f.id) as count, AVG(f.overall_rating) as avg_rating
@@ -885,7 +948,7 @@ def get_faculty_stats():
 
 
 def get_user_by_username(username):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('SELECT id, username, role, attendance, has_access FROM users WHERE username = ?', (username,))
     user = cursor.fetchone()
@@ -894,11 +957,11 @@ def get_user_by_username(username):
 
 
 def get_db_connection():
-    """Get a database connection."""
-    return sqlite3.connect(DB_PATH)
+    """Compatibility helper for code that expects this function name."""
+    return db_connect()
 
 def get_all_students():
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute("SELECT id, username, attendance, has_access FROM users WHERE role = 'student' ORDER BY username")
     rows = cursor.fetchall()
@@ -907,7 +970,7 @@ def get_all_students():
 
 
 def set_student_access(user_id, value):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('UPDATE users SET has_access = ? WHERE id = ?', (1 if value else 0, user_id))
     conn.commit()
@@ -915,7 +978,7 @@ def set_student_access(user_id, value):
 
 
 def update_student_attendance(user_id, attendance):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('UPDATE users SET attendance = ? WHERE id = ?', (int(attendance), user_id))
     conn.commit()
@@ -923,7 +986,7 @@ def update_student_attendance(user_id, attendance):
 
 def get_faculty_by_user(faculty_user_id):
     """Get faculty record linked to a faculty user account."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('SELECT faculty_id FROM users WHERE id = ? AND role = ?', (faculty_user_id, 'faculty'))
     result = cursor.fetchone()
@@ -932,7 +995,7 @@ def get_faculty_by_user(faculty_user_id):
 
 def get_faculty_details(faculty_user_id):
     """Get complete faculty details including department/branch."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('SELECT u.faculty_id, f.name, f.department FROM users u JOIN faculty f ON u.faculty_id = f.id WHERE u.id = ? AND u.role = ?', (faculty_user_id, 'faculty'))
     result = cursor.fetchone()
@@ -941,7 +1004,7 @@ def get_faculty_details(faculty_user_id):
 
 def get_faculty_subjects(faculty_id):
     """Get subjects taught by a faculty member."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('''SELECT s.id, s.name, s.year_level FROM subjects s
                       JOIN faculty_subject fs ON s.id = fs.subject_id
@@ -952,7 +1015,7 @@ def get_faculty_subjects(faculty_id):
 
 def get_students_by_year_and_branch(year_level=None, branch=None):
     """Get all students (can filter by year/branch if stored in users table)."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute("SELECT id, username FROM users WHERE role = 'student' ORDER BY username")
     rows = cursor.fetchall()
@@ -961,7 +1024,7 @@ def get_students_by_year_and_branch(year_level=None, branch=None):
 
 def get_students_by_branch_and_class(branch=None, class_level=None):
     """Get students filtered by branch and class/year level, including roll_number."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     query = "SELECT id, username, name, roll_number, branch, class FROM users WHERE role = 'student'"
     params = []
@@ -981,7 +1044,7 @@ def get_students_by_branch_and_class(branch=None, class_level=None):
 
 def save_attendance(student_id, faculty_id, subject_id, month, year, classes_attended, total_classes):
     """Save or update student attendance record."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     # Compute academic year string from calendar month/year. Academic year runs from July 1 -> June 30.
     try:
@@ -1009,7 +1072,7 @@ def save_attendance(student_id, faculty_id, subject_id, month, year, classes_att
 
 def get_attendance_for_month(faculty_id, subject_id, month, year):
     """Get all attendance records for a faculty's subject for a specific month."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     # Use academic_year mapping so that month/year are interpreted within the academic year (Jul-Jun)
     try:
@@ -1037,7 +1100,7 @@ def get_attendance_for_month(faculty_id, subject_id, month, year):
 
 def get_student_attendance_percentage(student_id):
     """Calculate overall attendance percentage for a student."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('''SELECT COALESCE(SUM(classes_attended), 0) as attended, COALESCE(SUM(total_classes), 0) as total
                       FROM attendance WHERE student_id = ?''', (student_id,))
@@ -1049,7 +1112,7 @@ def get_student_attendance_percentage(student_id):
 
 def get_attendance_by_year_and_branch(year_level=None, branch=None):
     """Get all attendance records with student info, grouped by year/branch."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     query = '''SELECT u.id, u.username, a.classes_attended, a.total_classes, s.name, f.name as faculty_name, f.department
                FROM attendance a
@@ -1073,7 +1136,7 @@ def get_attendance_by_year_and_branch(year_level=None, branch=None):
 
 def get_monthly_attendance_rollup(faculty_id, subject_id, month, year):
     """Compute a monthly attendance rollup from daily_attendance table for given faculty, subject, month/year."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     # We will count number of present days per student and total distinct dates recorded
     month_prefix = f"{year:04d}-{month:02d}-"
@@ -1089,7 +1152,7 @@ def get_monthly_attendance_rollup(faculty_id, subject_id, month, year):
 
 def get_present_student_ids_for_date(faculty_id, subject_id, date_str):
     """Return set of student_ids marked present for a given faculty/subject/date."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('''SELECT student_id FROM daily_attendance WHERE faculty_id = ? AND subject_id = ? AND date = ? AND present = 1''', (faculty_id, subject_id, date_str))
     rows = cursor.fetchall()
@@ -1099,7 +1162,7 @@ def get_present_student_ids_for_date(faculty_id, subject_id, date_str):
 
 def save_daily_ler(faculty_id, subject_id, date_str, time_str, topic, lecture_number, percent_syllabus, total_present, absent_roll_numbers, sign, remark):
     """Save a Daily LER entry to the database."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('''INSERT INTO daily_ler (faculty_id, subject_id, date, time, topic, lecture_number, percent_syllabus, total_present, absent_roll_numbers, sign, remark)
                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', (faculty_id, subject_id, date_str, time_str, topic, str(lecture_number), percent_syllabus, total_present, absent_roll_numbers, sign, remark))
@@ -1110,7 +1173,7 @@ def save_daily_ler(faculty_id, subject_id, date_str, time_str, topic, lecture_nu
 
 
 def get_daily_ler_for_faculty(faculty_id, date_from=None, date_to=None):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     if date_from and date_to:
         cursor.execute('''SELECT dl.id, dl.faculty_id, dl.subject_id, dl.date, dl.time, dl.topic, dl.lecture_number, dl.percent_syllabus, dl.total_present, dl.absent_roll_numbers, dl.sign, dl.remark, dl.created_at, f.name, s.name
@@ -1130,7 +1193,7 @@ def get_daily_ler_for_faculty(faculty_id, date_from=None, date_to=None):
 
 
 def get_all_daily_ler(date_from=None, date_to=None, faculty_id=None):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     query = '''SELECT dl.id, dl.faculty_id, f.name as faculty_name, dl.subject_id, s.name as subject_name, dl.date, dl.time, dl.topic, dl.lecture_number, dl.percent_syllabus, dl.total_present, dl.absent_roll_numbers, dl.sign, dl.remark, dl.created_at
                FROM daily_ler dl
@@ -1153,7 +1216,7 @@ def get_all_daily_ler(date_from=None, date_to=None, faculty_id=None):
 
 def get_all_faculty_with_users():
     """Get all faculty members with their user info."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('''SELECT f.id, f.name, f.department, u.username 
                       FROM faculty f
@@ -1167,7 +1230,7 @@ def get_all_faculty_with_users():
 ### New helper functions: feedback scheduling, daily attendance and tests ###
 def schedule_feedback(start_ts, end_ts):
     """Admin: schedule feedback availability."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     # Store ISO-8601 timezone-aware strings; start_ts/end_ts should be isoformat strings
     cursor.execute('INSERT INTO feedback_schedule (start_ts, end_ts) VALUES (?, ?)', (start_ts, end_ts))
@@ -1176,7 +1239,7 @@ def schedule_feedback(start_ts, end_ts):
 
 def get_current_feedback_schedule():
     """Return the latest feedback schedule (start_ts, end_ts) or None."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('SELECT start_ts, end_ts FROM feedback_schedule ORDER BY id DESC LIMIT 1')
     row = cursor.fetchone()
@@ -1200,7 +1263,7 @@ def is_feedback_open(now_ts=None):
 
 def save_daily_attendance(student_id, faculty_id, subject_id, date_str, present):
     """Save or update daily attendance for a student on a date (YYYY-MM-DD)."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     # Try to update first
     cursor.execute('''UPDATE daily_attendance SET present = ?, created_at = CURRENT_TIMESTAMP
@@ -1216,7 +1279,7 @@ def save_daily_attendance(student_id, faculty_id, subject_id, date_str, present)
 
 def get_daily_attendance_for_student(student_id, date_str=None):
     """Return daily attendance records for a student; optionally filter by date (YYYY-MM-DD)."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     if date_str:
         cursor.execute('SELECT faculty_id, subject_id, date, present FROM daily_attendance WHERE student_id = ? AND date = ? ORDER BY date DESC', (student_id, date_str))
@@ -1227,7 +1290,7 @@ def get_daily_attendance_for_student(student_id, date_str=None):
     return rows
 
 def create_test(faculty_id, subject_id, title, description, start_ts=None, end_ts=None, proctored=False):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     # Ensure start_ts and end_ts, when provided, are stored as timezone-aware ISO strings (Asia/Kolkata)
     try:
@@ -1259,7 +1322,7 @@ def create_test(faculty_id, subject_id, title, description, start_ts=None, end_t
     return tid
 
 def add_test_question(test_id, question_text, choices_list, correct_index, marks=1):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     choices_json = json.dumps(choices_list)
     cursor.execute('''INSERT INTO test_questions (test_id, question_text, choices, correct_choice, marks)
@@ -1272,7 +1335,7 @@ def add_test_question(test_id, question_text, choices_list, correct_index, marks
 def get_tests_for_student(student_id):
     """Return tests relevant for a student by matching subject.year_level and department to student's class/branch.
     Only returns tests whose start_ts/end_ts exist (not filtering by time here)."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('SELECT branch, class FROM users WHERE id = ?', (student_id,))
     row = cursor.fetchone()
@@ -1308,7 +1371,7 @@ def get_tests_for_student(student_id):
     return tests
 
 def get_test_questions(test_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('SELECT id, question_text, choices, correct_choice, marks FROM test_questions WHERE test_id = ? ORDER BY id', (test_id,))
     rows = cursor.fetchall()
@@ -1337,7 +1400,7 @@ def submit_test_attempt(test_id, student_id, answers_dict, started_at=None, subm
                 total_score += marks
         except Exception:
             pass
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     answers_json = json.dumps(answers_dict)
     # Write a log entry before attempting insert (helps debug missing inserts)
@@ -1369,7 +1432,7 @@ def submit_test_attempt(test_id, student_id, answers_dict, started_at=None, subm
         conn.close()
 
 def get_test_attempts_for_student(student_id, test_id=None):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     if test_id:
         cursor.execute('SELECT id, test_id, score, started_at, submitted_at FROM test_attempts WHERE student_id = ? AND test_id = ? ORDER BY submitted_at DESC', (student_id, test_id))
@@ -1382,7 +1445,7 @@ def get_test_attempts_for_student(student_id, test_id=None):
 
 def get_test_attempts_for_test(test_id):
     """Return all attempts for a given test id, joined with student username/name."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('''SELECT ta.id, ta.test_id, ta.student_id, ta.answers, ta.score, ta.started_at, ta.submitted_at, u.username, u.name
                       FROM test_attempts ta
@@ -1395,7 +1458,7 @@ def get_test_attempts_for_test(test_id):
 
 
 def create_notice(title, content, target_branch=None, target_class=None, created_by_role='admin', created_by_id=None):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('''INSERT INTO notices (title, content, target_branch, target_class, created_by_role, created_by_id)
                       VALUES (?, ?, ?, ?, ?, ?)''', (title, content, target_branch, target_class, created_by_role, created_by_id))
@@ -1406,7 +1469,7 @@ def create_notice(title, content, target_branch=None, target_class=None, created
 
 
 def get_notices(target_branch=None, target_class=None, limit=10):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     if target_branch and target_class:
         cursor.execute('''SELECT id, title, content, target_branch, target_class, created_by_role, created_by_id, created_at
@@ -1424,7 +1487,7 @@ def get_notices(target_branch=None, target_class=None, limit=10):
 
 
 def submit_faculty_leave(faculty_id, leave_type, start_date, end_date, is_half_day=False, days_count=1, alt_faculty=None):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('''INSERT INTO faculty_leaves (faculty_id, leave_type, start_date, end_date, is_half_day, days_count, alt_faculty)
                       VALUES (?, ?, ?, ?, ?, ?, ?)''', (faculty_id, leave_type, start_date, end_date, 1 if is_half_day else 0, days_count, alt_faculty))
@@ -1435,7 +1498,7 @@ def submit_faculty_leave(faculty_id, leave_type, start_date, end_date, is_half_d
 
 
 def get_faculty_leaves(faculty_id=None):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     if faculty_id:
         cursor.execute('''SELECT id, faculty_id, leave_type, start_date, end_date, is_half_day, days_count, alt_faculty, created_at
@@ -1449,7 +1512,7 @@ def get_faculty_leaves(faculty_id=None):
 
 
 def get_faculty_leave_usage(faculty_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     # Compute current academic year range and only count leaves within it so balances reset each academic year
     start_iso, end_iso, _ = get_academic_year_range_for_date()
@@ -1465,7 +1528,7 @@ def get_faculty_leave_usage(faculty_id):
 
 def get_all_subjects():
     """Get all available subjects."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('SELECT id, name, year_level, department, code FROM subjects ORDER BY year_level, name')
     rows = cursor.fetchall()
@@ -1501,7 +1564,7 @@ def get_academic_year_range_for_date(dt=None):
 
 def get_faculty_subjects_with_ids(faculty_id):
     """Get subject IDs assigned to a faculty."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute('SELECT subject_id FROM faculty_subject WHERE faculty_id = ?', (faculty_id,))
     rows = cursor.fetchall()
@@ -1510,11 +1573,10 @@ def get_faculty_subjects_with_ids(faculty_id):
 
 def assign_subject_to_faculty(faculty_id, subject_id):
     """Assign a subject to a faculty member."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     try:
-        cursor.execute('INSERT INTO faculty_subject (faculty_id, subject_id) VALUES (?, ?)',
-                      (faculty_id, subject_id))
+        cursor.execute('INSERT INTO faculty_subject (faculty_id, subject_id) VALUES (?, ?)', (faculty_id, subject_id))
         conn.commit()
         conn.close()
         return True
@@ -1524,13 +1586,12 @@ def assign_subject_to_faculty(faculty_id, subject_id):
 
 def add_subject(name, year_level, department=None, code=None):
     """Insert a new subject into the subjects table."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     try:
-        cursor.execute('INSERT INTO subjects (name, year_level, department, code) VALUES (?, ?, ?, ?)',
-                      (name, year_level, department, code))
+        cursor.execute('INSERT INTO subjects (name, year_level, department, code) VALUES (?, ?, ?, ?)', (name, year_level, department, code))
         conn.commit()
-        sid = cursor.lastrowid
+        sid = cursor.lastrowid if hasattr(cursor, 'lastrowid') else None
         conn.close()
         return sid
     except Exception:
@@ -1539,7 +1600,7 @@ def add_subject(name, year_level, department=None, code=None):
 
 def remove_subject_from_faculty(faculty_id, subject_id):
     """Remove a subject assignment from a faculty member."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect()
     cursor = conn.cursor()
     try:
         cursor.execute('DELETE FROM faculty_subject WHERE faculty_id = ? AND subject_id = ?',
@@ -1689,7 +1750,7 @@ if not st.session_state.logged_in:
                 elif len(new_password) < 6:
                     st.error("Password must be at least 6 characters")
                 else:
-                    conn = sqlite3.connect(DB_PATH)
+                    conn = db_connect()
                     cursor = conn.cursor()
                     try:
                         cursor.execute('INSERT INTO users (username, password, role, name, roll_number, branch, class) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -1732,7 +1793,7 @@ if not st.session_state.logged_in:
                 elif not selected_year_levels:
                     st.error("Please select at least one year level")
                 else:
-                    conn = sqlite3.connect(DB_PATH)
+                    conn = db_connect()
                     cursor = conn.cursor()
                     try:
                         # Check if username already exists
@@ -1778,7 +1839,7 @@ else:
             # student's branch and class info
             user = get_user_by_username(st.session_state.username) if st.session_state.username else None
             user_id = user[0] if user else None
-            conn = sqlite3.connect(DB_PATH)
+            conn = db_connect()
             cursor = conn.cursor()
             cursor.execute('SELECT id, username, name, branch, class FROM users WHERE id = ? AND role = ?', (user_id, 'student'))
             student_info = cursor.fetchone()
@@ -1810,7 +1871,7 @@ else:
                     attempt_rows = []
                     for att in recent_attempts:
                         aid, ttid, score, started_at, submitted_at = att
-                        conn = sqlite3.connect(DB_PATH)
+                        conn = db_connect()
                         cur = conn.cursor()
                         cur.execute('SELECT title FROM tests WHERE id = ?', (ttid,))
                         test_title = cur.fetchone()
@@ -1892,7 +1953,7 @@ else:
             user_id = user[0] if user else None
             
             # Get complete student info including branch and class
-            conn = sqlite3.connect(DB_PATH)
+            conn = db_connect()
             cursor = conn.cursor()
             cursor.execute('SELECT id, username, name, branch, class FROM users WHERE id = ? AND role = ?', (user_id, 'student'))
             student_info = cursor.fetchone()
@@ -2122,7 +2183,7 @@ else:
             # Get student's info
             user = get_user_by_username(st.session_state.username) if st.session_state.username else None
             user_id = user[0] if user else None
-            conn = sqlite3.connect(DB_PATH)
+            conn = db_connect()
             cursor = conn.cursor()
             cursor.execute('SELECT id, username, name, branch, class FROM users WHERE id = ? AND role = ?', (user_id, 'student'))
             student_info = cursor.fetchone()
@@ -2146,7 +2207,7 @@ else:
                 st.markdown("---")
                 
                 # Get all subjects for this year level and branch
-                conn = sqlite3.connect(DB_PATH)
+                conn = db_connect()
                 cursor = conn.cursor()
                 cursor.execute('''SELECT DISTINCT id, name, year_level, department 
                                   FROM subjects 
@@ -2213,7 +2274,7 @@ else:
                     st.write(f"The following faculties have uploaded resources for your {student_year_level}:")
                     
                     # Get all faculties teaching subjects for this year/branch
-                    conn = sqlite3.connect(DB_PATH)
+                    conn = db_connect()
                     cursor = conn.cursor()
                     cursor.execute('''SELECT DISTINCT f.id, f.name, f.department 
                                       FROM faculty f
@@ -2232,7 +2293,7 @@ else:
                             
                             with st.expander(f"👨‍🏫 {fac_name} ({fac_dept}) — {fac_resource_count} resource(s)"):
                                 # Get their subjects
-                                conn = sqlite3.connect(DB_PATH)
+                                conn = db_connect()
                                 cursor = conn.cursor()
                                 cursor.execute('''SELECT DISTINCT s.name 
                                                   FROM subjects s
@@ -2265,7 +2326,7 @@ else:
                     else:
                         st.error(f"❌ Need {60 - user_attendance_pct:.1f}% more attendance")
                 # Get attendance details
-                conn = sqlite3.connect(DB_PATH)
+                conn = db_connect()
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT a.month, a.year, a.classes_attended, a.total_classes, s.name, f.name
@@ -2347,7 +2408,7 @@ else:
                 st.info("No test selected. Go to 'Tests' to choose a test.")
             else:
                 # Load test details
-                conn = sqlite3.connect(DB_PATH)
+                conn = db_connect()
                 cursor = conn.cursor()
                 cursor.execute('''SELECT t.id, t.title, t.description, t.start_ts, t.end_ts, t.proctored, s.name, s.year_level, s.department
                                   FROM tests t JOIN subjects s ON t.subject_id = s.id
@@ -2406,7 +2467,7 @@ else:
 
                                     # Verify the attempt was saved to the database and show confirmation
                                     try:
-                                        conn = sqlite3.connect(DB_PATH)
+                                        conn = db_connect()
                                         cur = conn.cursor()
                                         cur.execute('SELECT id, test_id, student_id, score, started_at, submitted_at FROM test_attempts WHERE id = ?', (res.get('attempt_id'),))
                                         saved = cur.fetchone()
@@ -2420,7 +2481,7 @@ else:
                                     # Prepare CSV summary for the student's attempt so they can download it immediately
                                     try:
                                         student_username = None
-                                        conn = sqlite3.connect(DB_PATH)
+                                        conn = db_connect()
                                         cur = conn.cursor()
                                         cur.execute('SELECT username, name FROM users WHERE id = ?', (st.session_state.user_id,))
                                         u = cur.fetchone()
@@ -2450,7 +2511,7 @@ else:
             user = get_user_by_username(st.session_state.username) if st.session_state.username else None
             user_id = user[0] if user else None
             
-            conn = sqlite3.connect(DB_PATH)
+            conn = db_connect()
             cursor = conn.cursor()
             cursor.execute('SELECT id, username, name, branch, class FROM users WHERE id = ? AND role = ?', (user_id, 'student'))
             student_info = cursor.fetchone()
@@ -2686,7 +2747,7 @@ else:
                                 csv_data = []
                                 import io
                                 for student_id, classes_attended, total_classes in rows:
-                                    conn = sqlite3.connect(DB_PATH)
+                                    conn = db_connect()
                                     cur = conn.cursor()
                                     cur.execute('SELECT username, name, roll_number FROM users WHERE id = ?', (student_id,))
                                     u = cur.fetchone()
@@ -2897,7 +2958,7 @@ else:
                                 st.error("Failed to create test.")
                     st.markdown("---")
                     st.subheader("Add Questions to a Test")
-                    conn = sqlite3.connect(DB_PATH)
+                    conn = db_connect()
                     cursor = conn.cursor()
                     cursor.execute('SELECT id, title FROM tests WHERE faculty_id = ? ORDER BY created_at DESC', (faculty_id,))
                     faculty_tests = cursor.fetchall()
@@ -3373,7 +3434,7 @@ else:
 
                                 # Determine username: prefer PRN, then roll, then generated
                                 username_candidate = prn or roll or None
-                                conn = sqlite3.connect(DB_PATH)
+                                conn = db_connect()
                                 cur = conn.cursor()
                                 user_id = None
                                 if roll:
@@ -3785,7 +3846,7 @@ else:
             
             # First, show all tests in the system
             st.subheader("📋 All Tests in System")
-            conn = sqlite3.connect(DB_PATH)
+            conn = db_connect()
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT t.id, t.title, t.faculty_id, f.name, t.start_ts, t.end_ts
@@ -3831,7 +3892,7 @@ else:
             st.divider()
             st.subheader("🔧 Admin: Seed Demo Attempt")
             try:
-                conn2 = sqlite3.connect(DB_PATH)
+                conn2 = db_connect()
                 cur2 = conn2.cursor()
                 cur2.execute("SELECT id, username, name FROM users WHERE role = 'student' ORDER BY id")
                 student_rows = cur2.fetchall()
