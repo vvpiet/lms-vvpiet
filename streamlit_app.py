@@ -328,8 +328,8 @@ def db_connect():
             def rollback(self):
                 return self._conn.rollback()
 
-        # Connect to Postgres; enforce ssl if present in environment
-        conn = psycopg2.connect(DATABASE_URL)
+        # Connect to Postgres using the repaired DSN (with encoded password and SSL)
+        conn = psycopg2.connect(dsn)
         return PGConnWrapper(conn)
     else:
         # SQLite for local development; allow multithreaded access
