@@ -257,6 +257,33 @@ def db_connect():
         except Exception:
             raise RuntimeError("psycopg2 is required when DATABASE_URL is set. Add psycopg2-binary to requirements.txt")
 
+        # If the DATABASE_URL contains unencoded special characters (for example '@' in the password)
+        # try to repair it by percent-encoding the password portion. Also ensure SSL is required
+        # for hosted providers like Supabase.
+        try:
+            from urllib.parse import quote_plus
+            dsn = DATABASE_URL
+            # If there are multiple '@' characters it's likely the password contains an '@' that
+            # wasn't percent-encoded. Rebuild the DSN by splitting at the last '@'.
+            if dsn.count('@') > 1 and '://' in dsn:
+                scheme, rest = dsn.split('://', 1)
+                last_at = rest.rfind('@')
+                auth = rest[:last_at]
+                host_part = rest[last_at+1:]
+                if ':' in auth:
+                    user, pwd = auth.split(':', 1)
+                    pwd_enc = quote_plus(pwd)
+                    dsn = f"{scheme}://{user}:{pwd_enc}@{host_part}"
+
+            # Ensure sslmode is present (many hosted Postgres instances require SSL)
+            if 'sslmode=' not in dsn:
+                if '?' in dsn:
+                    dsn = dsn + '&sslmode=require'
+                else:
+                    dsn = dsn + '?sslmode=require'
+        except Exception:
+            dsn = DATABASE_URL
+
         class PGCursorWrapper:
             def __init__(self, cur):
                 self._cur = cur
