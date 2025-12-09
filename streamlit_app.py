@@ -5,6 +5,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
 from zoneinfo import ZoneInfo
+# AFTER `import streamlit as st` and `import os`
+try:
+    # Prefer Streamlit secrets (Streamlit Cloud)
+    DATABASE_URL = st.secrets.get("DATABASE_URL", None)
+except Exception:
+    DATABASE_URL = None
+
+if not DATABASE_URL:
+    # Fallback to OS env var (local dev)
+    DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def parse_iso_to_kolkata(dt_str_or_obj):
     """Parse an ISO string or datetime and return a tz-aware datetime in Asia/Kolkata."""
