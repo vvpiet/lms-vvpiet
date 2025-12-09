@@ -259,9 +259,12 @@ def db_connect():
 
         # If the DATABASE_URL contains unencoded special characters (for example '@' in the password)
         # try to repair it by percent-encoding the password portion. Also ensure SSL is required
-        # for hosted providers like Supabase.
+        # for hosted providers like Supabase. Then prefer an IPv4 address when connecting to
+        # avoid errors where the environment cannot bind or use IPv6 addresses.
         try:
-            from urllib.parse import quote_plus
+            from urllib.parse import quote_plus, urlparse, unquote_plus
+            import socket
+
             dsn = DATABASE_URL
             # If there are multiple '@' characters it's likely the password contains an '@' that
             # wasn't percent-encoded. Rebuild the DSN by splitting at the last '@'.
@@ -281,8 +284,31 @@ def db_connect():
                     dsn = dsn + '&sslmode=require'
                 else:
                     dsn = dsn + '?sslmode=require'
+
+            # Parse DSN so we can resolve an IPv4 address and connect using numeric host
+            parsed = urlparse(dsn)
+            host = parsed.hostname
+            port = parsed.port or 5432
+            username = parsed.username and unquote_plus(parsed.username)
+            password = parsed.password and unquote_plus(parsed.password)
+            dbname = parsed.path[1:] if parsed.path and parsed.path.startswith('/') else (parsed.path or '')
+
+            ipv4 = None
+            try:
+                for res in socket.getaddrinfo(host, port, family=socket.AF_INET, type=socket.SOCK_STREAM):
+                    ipv4 = res[4][0]
+                    break
+            except Exception:
+                ipv4 = None
+
         except Exception:
+            # If any of the parsing/resolution fails, fall back to raw DATABASE_URL
             dsn = DATABASE_URL
+            host = None
+            ipv4 = None
+            username = None
+            password = None
+            port = None
 
         class PGCursorWrapper:
             def __init__(self, cur):
@@ -328,8 +354,26 @@ def db_connect():
             def rollback(self):
                 return self._conn.rollback()
 
-        # Connect to Postgres using the repaired DSN (with encoded password and SSL)
-        conn = psycopg2.connect(dsn)
+        # Connect to Postgres: prefer using resolved IPv4 address (if available) and
+        # explicit connection parameters to avoid IPv6 'Cannot assign requested address' errors.
+        try:
+            if 'ipv4' in locals() and ipv4:
+                connect_kwargs = {
+                    'host': ipv4,
+                    'port': port or 5432,
+                    'user': username,
+                    'password': password,
+                    'dbname': dbname or 'postgres',
+                    'sslmode': 'require',
+                    'connect_timeout': 10,
+                }
+                conn = psycopg2.connect(**connect_kwargs)
+            else:
+                # Fall back to DSN string
+                conn = psycopg2.connect(dsn, connect_timeout=10)
+        except Exception:
+            # Re-raise to let calling code capture the full psycopg2 error (logged by Streamlit)
+            raise
         return PGConnWrapper(conn)
     else:
         # SQLite for local development; allow multithreaded access
