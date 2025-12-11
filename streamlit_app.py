@@ -360,7 +360,7 @@ def db_connect():
         try:
             if 'ipv4' in locals() and ipv4:
                 connect_kwargs = {
-                   "host": "ep-npg_bumiN6P7plUM.us-east-2.aws.neon.tech",
+                   "host": "lingering-art-02369412.us-east-2.aws.neon.tech",
                    "dbname": "dbname",
                    "user": "user",
                    "password": "pass",
