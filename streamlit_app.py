@@ -363,7 +363,7 @@ def db_connect():
                    "host": "lingering-art-02369412.us-east-2.aws.neon.tech",
                    "dbname": "dbname",
                    "user": "user",
-                   "password": "pass",
+                   "password": "npg_bumiN6P7plUM",
                    "sslmode": "require",
                    "connect_timeout": 10,
                 }
