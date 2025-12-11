@@ -362,7 +362,7 @@ def db_connect():
                 connect_kwargs = {
                    "host": "lingering-art-02369412.us-east-2.aws.neon.tech",
                    "dbname": "dbname",
-                   "user": "user",
+                   "user": "lingering-art-02369412",
                    "password": "npg_bumiN6P7plUM",
                    "sslmode": "require",
                    "connect_timeout": 10,
