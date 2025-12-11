@@ -266,7 +266,7 @@ def db_connect():
             from urllib.parse import quote_plus, urlparse, unquote_plus
             import socket
 
-            dsn = DATABASE_URL
+            dsn = ("postgresql://neondb_owner:npg_bumiN6P7plUM@ep-cold-brook-a4l9p6sk-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require")
             # If there are multiple '@' characters it's likely the password contains an '@' that
             # wasn't percent-encoded. Rebuild the DSN by splitting at the last '@'.
             if dsn.count('@') > 1 and '://' in dsn:
@@ -360,13 +360,12 @@ def db_connect():
         try:
             if 'ipv4' in locals() and ipv4:
                 connect_kwargs = {
-                    'host': ipv4,
-                    'port': port or 5432,
-                    'user': username,
-                    'password': password,
-                    'dbname': dbname or 'postgres',
-                    'sslmode': 'require',
-                    'connect_timeout': 10,
+                   "host": "ep-xxxxxxx.us-east-2.aws.neon.tech",
+                   "dbname": "dbname",
+                   "user": "user",
+                   "password": "pass",
+                   "sslmode": "require",
+                   "connect_timeout": 10,
                 }
                 conn = psycopg2.connect(**connect_kwargs)
             else:
