@@ -360,12 +360,12 @@ def db_connect():
         try:
             if 'ipv4' in locals() and ipv4:
                 connect_kwargs = {
-                   "host": "lingering-art-02369412.us-east-2.aws.neon.tech",
-                   "dbname": "neondb",
-                   "user": "neondb_owner",
-                   "password": "npg_bumiN6P7plUM",
-                   "sslmode": "require",
-                   "connect_timeout": 10,
+                   host="ep-cold-brook-a4l9p6sk-pooler.us-east-1.aws.neon.tech",
+                   dbname="neondb",
+                   user="neondb_owner",
+                   password="npg_bumiN6P7plUM",
+                   sslmode="require",
+                   options="-c endpoint=ep-cold-brook-a4l9p6sk"
                 }
                 conn = psycopg2.connect(**connect_kwargs)
             else:
