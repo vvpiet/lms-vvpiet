@@ -361,8 +361,8 @@ def db_connect():
             if 'ipv4' in locals() and ipv4:
                 connect_kwargs = {
                    "host": "lingering-art-02369412.us-east-2.aws.neon.tech",
-                   "dbname": "dbname",
-                   "user": "lingering-art-02369412",
+                   "dbname": "neondb",
+                   "user": "neondb_owner",
                    "password": "npg_bumiN6P7plUM",
                    "sslmode": "require",
                    "connect_timeout": 10,
