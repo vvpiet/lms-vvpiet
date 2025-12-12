@@ -266,7 +266,7 @@ def db_connect():
             from urllib.parse import quote_plus, urlparse, unquote_plus
             import socket
 
-            dsn = ("postgresql://neondb_owner:npg_bumiN6P7plUM@ep-cold-brook-a4l9p6sk-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require")
+            dsn = ("postgresql://neondb_owner:npg_bumiN6P7plUM@ep-cold-brook-a4l9p6sk-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require&options=endpoint%3Dep-cold-brook-a4l9p6sk")
             # If there are multiple '@' characters it's likely the password contains an '@' that
             # wasn't percent-encoded. Rebuild the DSN by splitting at the last '@'.
             if dsn.count('@') > 1 and '://' in dsn:
