@@ -252,23 +252,31 @@ DB_PATH = "feedback_streamlit.db"
 # (converted to `%s` for psycopg2). Otherwise it uses local sqlite3.
 def db_connect():
     """Return a DB-API connection. Uses Postgres if DATABASE_URL is set, else SQLite."""
+    import os
+    import sqlite3
+
+    # Make sure these module-level names exist in your file:
+    # DATABASE_URL (string or None), DB_PATH (path to sqlite file)
+    # e.g. DATABASE_URL = os.environ.get("DATABASE_URL")
+    #      DB_PATH = "feedback_streamlit.db"
+
     if DATABASE_URL:
         try:
             import psycopg2
         except Exception:
-            raise RuntimeError("psycopg2 is required when DATABASE_URL is set. Add psycopg2-binary to requirements.txt")
+            raise RuntimeError(
+                "psycopg2 is required when DATABASE_URL is set. "
+                "Add psycopg2-binary to requirements.txt"
+            )
 
-        # If the DATABASE_URL contains unencoded special characters (for example '@' in the password)
-        # try to repair it by percent-encoding the password portion. Also ensure SSL is required
-        # for hosted providers like Supabase. Then prefer an IPv4 address when connecting to
-        # avoid errors where the environment cannot bind or use IPv6 addresses.
+        from urllib.parse import quote_plus, urlparse, unquote_plus, parse_qsl, urlencode
+
+        # Start from the provided DATABASE_URL (or the hardcoded DSN you had)
+        # If you want to prefer the hardcoded one, replace DATABASE_URL below with your dsn variable.
+        dsn = DATABASE_URL.strip()
+
+        # If password contains special chars and the DSN has multiple '@', rebuild with encoded password
         try:
-            from urllib.parse import quote_plus, urlparse, unquote_plus
-            import socket
-
-            dsn = ("postgresql://neondb_owner:npg_bumiN6P7plUM@ep-cold-brook-a4l9p6sk-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require&options=endpoint%3Dep-cold-brook-a4l9p6sk")
-            # If there are multiple '@' characters it's likely the password contains an '@' that
-            # wasn't percent-encoded. Rebuild the DSN by splitting at the last '@'.
             if dsn.count('@') > 1 and '://' in dsn:
                 scheme, rest = dsn.split('://', 1)
                 last_at = rest.rfind('@')
@@ -276,41 +284,60 @@ def db_connect():
                 host_part = rest[last_at+1:]
                 if ':' in auth:
                     user, pwd = auth.split(':', 1)
-                    pwd_enc = quote_plus(pwd)
+                    pwd_enc = quote_plus(unquote_plus(pwd))
                     dsn = f"{scheme}://{user}:{pwd_enc}@{host_part}"
-
-            # Ensure sslmode is present (many hosted Postgres instances require SSL)
-            if 'sslmode=' not in dsn:
-                if '?' in dsn:
-                    dsn = dsn + '&sslmode=require'
-                else:
-                    dsn = dsn + '?sslmode=require'
-
-            # Parse DSN so we can resolve an IPv4 address and connect using numeric host
-            parsed = urlparse(dsn)
-            host = parsed.hostname
-            port = parsed.port or 5432
-            username = parsed.username and unquote_plus(parsed.username)
-            password = parsed.password and unquote_plus(parsed.password)
-            dbname = parsed.path[1:] if parsed.path and parsed.path.startswith('/') else (parsed.path or '')
-
-            ipv4 = None
-            try:
-                for res in socket.getaddrinfo(host, port, family=socket.AF_INET, type=socket.SOCK_STREAM):
-                    ipv4 = res[4][0]
-                    break
-            except Exception:
-                ipv4 = None
-
         except Exception:
-            # If any of the parsing/resolution fails, fall back to raw DATABASE_URL
-            dsn = DATABASE_URL
-            host = None
-            ipv4 = None
-            username = None
-            password = None
-            port = None
+            # If something goes wrong with reparsing, keep original dsn
+            pass
 
+        # Remove any channel_binding parameter (it often causes auth failures on some clients)
+        try:
+            parsed = urlparse(dsn)
+            query_pairs = dict(parse_qsl(parsed.query, keep_blank_values=True))
+
+            # Remove channel_binding if present
+            if 'channel_binding' in query_pairs:
+                query_pairs.pop('channel_binding', None)
+
+            # Ensure sslmode=require is present
+            if 'sslmode' not in query_pairs:
+                query_pairs['sslmode'] = 'require'
+
+            # If the host looks like Neon (ep-...), and options endpoint is not present, add it.
+            host = parsed.hostname or ''
+            # Extract endpoint id from host if it starts with 'ep-'
+            endpoint_id = None
+            if host.startswith('ep-'):
+                # host may be like ep-xxxxxxx-pooler.region.aws.neon.tech
+                # endpoint id is the first part up to the first dot or the first '-pooler' piece
+                endpoint_id = host.split('.', 1)[0]
+                # Normalize: if it contains suffixes like '-pooler', strip them
+                if '-pooler' in endpoint_id:
+                    endpoint_id = endpoint_id.split('-pooler', 1)[0]
+
+            # If endpoint_id was found and options not set, add it
+            if endpoint_id and 'options' not in query_pairs:
+                # options must be URL-encoded value like endpoint%3Dep-xxxx
+                # We'll place the unencoded value and let urlencode handle encoding
+                query_pairs['options'] = f"endpoint={endpoint_id}"
+
+            # Rebuild query and DSN
+            new_query = urlencode(query_pairs, doseq=True)
+            # Build new DSN preserving username/password/host/path
+            rebuilt = parsed._replace(query=new_query)
+            dsn = rebuilt.geturl()
+        except Exception:
+            # If parsing fails, fall back to original dsn (still better than nothing)
+            pass
+
+        # Now attempt to connect using the DSN string (psycopg2 accepts DSN string)
+        try:
+            conn = psycopg2.connect(dsn, connect_timeout=10)
+        except Exception:
+            # Re-raise so the caller (Streamlit) logs the full psycopg2 error
+            raise
+
+        # Thin wrapper to convert '?' -> '%s' for queries elsewhere in your app
         class PGCursorWrapper:
             def __init__(self, cur):
                 self._cur = cur
@@ -318,7 +345,6 @@ def db_connect():
             def execute(self, query, params=None):
                 if params is None:
                     return self._cur.execute(query)
-                # Convert sqlite-style ? placeholders to psycopg2 %s
                 q = query.replace('?', '%s')
                 return self._cur.execute(q, params)
 
@@ -355,26 +381,8 @@ def db_connect():
             def rollback(self):
                 return self._conn.rollback()
 
-        # Connect to Postgres: prefer using resolved IPv4 address (if available) and
-        # explicit connection parameters to avoid IPv6 'Cannot assign requested address' errors.
-        try:
-            if 'ipv4' in locals() and ipv4:
-                connect_kwargs = {
-                   host="ep-cold-brook-a4l9p6sk-pooler.us-east-1.aws.neon.tech",
-                   dbname="neondb",
-                   user="neondb_owner",
-                   password="npg_bumiN6P7plUM",
-                   sslmode="require",
-                   options="-c endpoint=ep-cold-brook-a4l9p6sk"
-                }
-                conn = psycopg2.connect(**connect_kwargs)
-            else:
-                # Fall back to DSN string
-                conn = psycopg2.connect(dsn, connect_timeout=10)
-        except Exception:
-            # Re-raise to let calling code capture the full psycopg2 error (logged by Streamlit)
-            raise
         return PGConnWrapper(conn)
+
     else:
         # SQLite for local development; allow multithreaded access
         return sqlite3.connect(DB_PATH, check_same_thread=False)
