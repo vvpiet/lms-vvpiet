@@ -57,6 +57,41 @@ def check_postgres(dsn):
                 c = 'n/a'
             print(f"  {t}: {c}")
         conn.close()
+        if args.inspect_sequences:
+            try:
+                import psycopg2
+                conn = psycopg2.connect(args.pg)
+                cur = conn.cursor()
+                print('\nInspect sequences for tables (pg_get_serial_sequence, seq last_value, max(id)):')
+                for t in ['users','faculty','faculty_year_level','faculty_resources','daily_ler','tests','test_questions','test_attempts','notices','faculty_leaves']:
+                    try:
+                        cur.execute("SELECT pg_get_serial_sequence(%s, %s)", (t, 'id'))
+                        seq = cur.fetchone()[0]
+                        if seq:
+                            try:
+                                cur.execute(f"SELECT last_value, is_called FROM {seq}")
+                                lv = cur.fetchone()
+                            except Exception:
+                                lv = None
+                            try:
+                                cur.execute(f"SELECT COALESCE(MAX(id), 0) FROM {t}")
+                                mx = cur.fetchone()[0]
+                            except Exception:
+                                mx = 'n/a'
+                            print(f" - {t}: seq={seq}, seq_last={lv}, max_id={mx}")
+                        else:
+                            # no sequence associated (maybe table created manually)
+                            try:
+                                cur.execute(f"SELECT COALESCE(MAX(id), 0) FROM {t}")
+                                mx = cur.fetchone()[0]
+                            except Exception:
+                                mx = 'n/a'
+                            print(f" - {t}: NO seq associated, max_id={mx}")
+                    except Exception as ex:
+                        print(f" - {t}: inspect error: {ex}")
+                conn.close()
+            except Exception as e:
+                print('Failed to inspect sequences:', e)
     except Exception as e:
         print('Failed to connect to Postgres:', e)
 
@@ -66,6 +101,7 @@ def main():
     p.add_argument('--sqlite', default=os.environ.get('SQLITE_PATH','feedback_streamlit.db'))
     p.add_argument('--pg', default=os.environ.get('DATABASE_URL'))
     p.add_argument('--sync-sequences', action='store_true', help='If set and using Postgres, sync serial sequences to max(id) for common tables')
+    p.add_argument('--inspect-sequences', action='store_true', help='Inspect whether tables have serial sequences and show their last_value and max(id)')
     args = p.parse_args()
 
     if args.pg:

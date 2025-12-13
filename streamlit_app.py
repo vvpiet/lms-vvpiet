@@ -682,6 +682,18 @@ def init_database():
     conn.commit()
     conn.close()
 
+    # If using a Postgres DB, ensure common tables have sequences and id defaults
+    if DATABASE_URL:
+        try:
+            for t in ['users', 'faculty', 'faculty_year_level', 'faculty_resources', 'daily_ler', 'tests', 'test_questions', 'test_attempts', 'notices', 'faculty_leaves']:
+                try:
+                    ensure_postgres_sequence(t)
+                except Exception:
+                    pass
+        except Exception:
+            # Do not crash application init if sequence setup fails; it's a best-effort fix
+            pass
+
 
 def ensure_postgres_sequence(table_name):
     """Ensure Postgres serial sequence for table_name is set to max(id) to avoid duplicate-key on insert.
@@ -1952,6 +1964,8 @@ if not st.session_state.logged_in:
                     conn = db_connect()
                     cursor = conn.cursor()
                     try:
+                        # Ensure users sequence/default exists on Postgres before inserting a new student
+                        ensure_postgres_sequence('users')
                         cursor.execute('INSERT INTO users (username, password, role, name, roll_number, branch, class) VALUES (?, ?, ?, ?, ?, ?, ?)',
                                       (new_username, hash_password(new_password), 'student', name, roll_number, selected_branch, selected_class))
                         conn.commit()
