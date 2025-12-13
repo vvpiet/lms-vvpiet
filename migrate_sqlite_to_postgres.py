@@ -144,6 +144,23 @@ def main():
             create_table_postgres(pgconn, t, cols, drop_if_exists=args.drop)
             print(' - Copying rows...')
             copy_table(s_conn, pgconn, t)
+        # After copying all tables, ensure Postgres sequences (serial) are synced to the
+        # maximum existing id values to avoid duplicate-key errors on future inserts.
+        print('\nSyncing Postgres sequences...')
+        pg_cur = pgconn.cursor()
+        for t in tables:
+            try:
+                pg_cur.execute("SELECT pg_get_serial_sequence(%s, %s)", (t, 'id'))
+                seq = pg_cur.fetchone()[0]
+                if seq:
+                    pg_cur.execute(f"SELECT setval('{seq}', COALESCE((SELECT MAX(id) FROM {t}), 1), true)")
+                    print(f" - Synced sequence for table '{t}' -> {seq}")
+                else:
+                    # No serial sequence found for this table; skip
+                    pass
+            except Exception as e:
+                print(f" - Could not sync sequence for table '{t}': {e}")
+        pgconn.commit()
         print('\nMigration complete.')
     finally:
         s_conn.close()

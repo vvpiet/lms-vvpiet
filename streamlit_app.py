@@ -667,6 +667,30 @@ def init_database():
     conn.commit()
     conn.close()
 
+
+def ensure_postgres_sequence(table_name):
+    """Ensure Postgres serial sequence for table_name is set to max(id) to avoid duplicate-key on insert.
+
+    This is a no-op when not running against Postgres (DATABASE_URL not set).
+    """
+    if not DATABASE_URL:
+        return
+    try:
+        conn = db_connect()
+        cur = conn.cursor()
+        cur.execute("SELECT pg_get_serial_sequence(%s, %s)", (table_name, 'id'))
+        seq = cur.fetchone()[0]
+        if seq:
+            # Sync sequence to max(id) to avoid duplicates (true -> is_called)
+            cur.execute(f"SELECT setval('{seq}', COALESCE((SELECT MAX(id) FROM {table_name}), 1), true)")
+            conn.commit()
+        conn.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
     # Ensure feedback table exists with up to 10 question columns (backfill/alter for older DBs)
     conn = db_connect()
     cursor = conn.cursor()
@@ -1923,10 +1947,27 @@ if not st.session_state.logged_in:
                         else:
                             # Create a new faculty record with the first selected year level as default
                             faculty_record_name = f"{name}"
-                            cursor.execute('INSERT INTO faculty (name, department, year_level) VALUES (?, ?, ?)',
-                                          (faculty_record_name, selected_branch, selected_year_levels[0]))
-                            conn.commit()
-                            fac_id = cursor.lastrowid
+                            try:
+                                cursor.execute('INSERT INTO faculty (name, department, year_level) VALUES (?, ?, ?)',
+                                              (faculty_record_name, selected_branch, selected_year_levels[0]))
+                                conn.commit()
+                                fac_id = cursor.lastrowid
+                            except Exception as e:
+                                # If a duplicate key error happens (commonly from Postgres sequences being behind),
+                                # try to sync sequence and retry once
+                                msg = str(e).lower()
+                                if 'duplicate key value violates unique constraint' in msg or 'duplicate key value' in msg or 'unique constraint' in msg:
+                                    ensure_postgres_sequence('faculty')
+                                    try:
+                                        cursor.execute('INSERT INTO faculty (name, department, year_level) VALUES (?, ?, ?)',
+                                                      (faculty_record_name, selected_branch, selected_year_levels[0]))
+                                        conn.commit()
+                                        fac_id = cursor.lastrowid
+                                    except Exception:
+                                        # If still failing, re-raise to be caught by outer handler
+                                        raise
+                                else:
+                                    raise
                             
                             # Add all selected year levels to faculty_year_level table
                             for year_level in selected_year_levels:
@@ -1935,9 +1976,23 @@ if not st.session_state.logged_in:
                             conn.commit()
                             
                             # Create the user account linked to faculty
-                            cursor.execute('INSERT INTO users (username, password, role, faculty_id, name, branch) VALUES (?, ?, ?, ?, ?, ?)',
-                                          (new_username, hash_password(new_password), 'faculty', fac_id, name, selected_branch))
-                            conn.commit()
+                            try:
+                                cursor.execute('INSERT INTO users (username, password, role, faculty_id, name, branch) VALUES (?, ?, ?, ?, ?, ?)',
+                                              (new_username, hash_password(new_password), 'faculty', fac_id, name, selected_branch))
+                                conn.commit()
+                            except Exception as e:
+                                msg = str(e).lower()
+                                if 'duplicate key value violates unique constraint' in msg or 'duplicate key value' in msg or 'unique constraint' in msg:
+                                    # Sync users sequence and retry once
+                                    ensure_postgres_sequence('users')
+                                    try:
+                                        cursor.execute('INSERT INTO users (username, password, role, faculty_id, name, branch) VALUES (?, ?, ?, ?, ?, ?)',
+                                                      (new_username, hash_password(new_password), 'faculty', fac_id, name, selected_branch))
+                                        conn.commit()
+                                    except Exception:
+                                        raise
+                                else:
+                                    raise
                             st.success("✓ Faculty registration successful! Please login.")
                             conn.close()
                     except sqlite3.IntegrityError as e:
