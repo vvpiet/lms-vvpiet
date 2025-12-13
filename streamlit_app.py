@@ -23,6 +23,26 @@ def parse_iso_to_kolkata(dt_str_or_obj):
         return dt.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
     else:
         return dt.astimezone(ZoneInfo("Asia/Kolkata"))
+
+
+def format_ts_for_display(ts, short=False):
+    """Return a safe string representation of a timestamp for UI display.
+
+    - Accepts None, ISO strings, or datetime objects.
+    - If `short` is True, returns a truncated date/time (first 16 chars) to match previous UI.
+    """
+    if not ts:
+        return 'N/A'
+    # If it's already a datetime, format it into a readable string in Asia/Kolkata
+    if isinstance(ts, datetime):
+        try:
+            s = ts.astimezone(ZoneInfo('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S')
+        except Exception:
+            s = ts.strftime('%Y-%m-%d %H:%M:%S')
+    else:
+        # For strings or other types, coerce to str (handles ISO strings from SQLite)
+        s = str(ts)
+    return s[:16] if short else s
 import json
 import base64
 import sqlite3
@@ -2102,7 +2122,8 @@ else:
                     with st.expander("📢 Notices"):
                         for n in notices[:5]:
                             nid, title, content, tbranch, tclass, cb_role, cb_id, created_at = n
-                            st.markdown(f"**{title}** — *{created_at[:16]}*")
+                            created_disp = format_ts_for_display(created_at, short=True)
+                            st.markdown(f"**{title}** — *{created_disp}*")
                             st.write(content)
                             st.markdown("---")
                 else:
@@ -2127,7 +2148,7 @@ else:
                             'attempt_id': aid,
                             'test': test_title,
                             'score': score,
-                            'submitted_at': submitted_at
+                            'submitted_at': format_ts_for_display(submitted_at, short=True)
                         })
                     df_attempts = pd.DataFrame(attempt_rows)
                     st.dataframe(df_attempts, use_container_width=True, hide_index=True)
@@ -3401,7 +3422,8 @@ else:
                 for fb in feedbacks[:10]:  # Show last 10
                     # fb indices: 0:id,1:created_at,2:fac_name,3:department,4:year_level,5:student_name,
                     # 6:q1,7:q2,8:q3,9:q4,10:q5,11:q6,12:q7,13:q8,14:q9,15:q10,16:overall,17:comments,18:subject
-                    with st.expander(f"{fb[2]} ({fb[4]}) - {fb[1][:10]} (Overall: {fb[16]}/10)"):
+                    created_disp = format_ts_for_display(fb[1], short=True)
+                    with st.expander(f"{fb[2]} ({fb[4]}) - {created_disp} (Overall: {fb[16]}/10)"):
                         col1, col2 = st.columns(2)
                         with col1:
                             st.write(f"**Faculty:** {fb[2]}")
@@ -3409,7 +3431,7 @@ else:
                             st.write(f"**Year Level:** {fb[4]}")
                             st.write(f"**Subject:** {fb[18]}")
                             st.write(f"**Student:** {fb[5]}")
-                            st.write(f"**Date:** {fb[1]}")
+                            st.write(f"**Date:** {format_ts_for_display(fb[1])}")
                         with col2:
                             st.write(f"**Ratings:**")
                             st.write(f"1. Fundamental Concepts & Subject Knowledge: {fb[6]}/10")
@@ -4188,10 +4210,10 @@ else:
                         'name': name or 'Unknown',
                         'roll_number': roll_number or 'N/A',
                         'score': score or 0,
-                        'submitted_at': submitted_at or 'N/A',
+                        'submitted_at': format_ts_for_display(submitted_at),
                         'answers_json': answers_json or ''
                     })
-                
+
                 df_attempts = pd.DataFrame(rows)
                 
                 # Display options
@@ -4216,9 +4238,18 @@ else:
                 
                 st.subheader(f"Attempts ({len(df_filtered)} of {len(df_attempts)})")
                 
-                # Display table
-                display_df = df_filtered[['attempt_id', 'test_title', 'username', 'name', 'roll_number', 'score', 'submitted_at']]
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
+                # Display table (skip if no rows)
+                if df_filtered.empty:
+                    st.info("No attempts match the current filters.")
+                else:
+                    # Safely select the display columns (ensure they exist)
+                    expected_cols = ['attempt_id', 'test_title', 'username', 'name', 'roll_number', 'score', 'submitted_at']
+                    present_cols = [c for c in expected_cols if c in df_filtered.columns]
+                    if not present_cols:
+                        st.warning("No displayable attempt columns available.")
+                    else:
+                        display_df = df_filtered[present_cols]
+                        st.dataframe(display_df, use_container_width=True, hide_index=True)
                 
                 # Download options
                 st.divider()
@@ -4245,22 +4276,23 @@ else:
                         use_container_width=True
                     )
                 
-                # Detailed view
-                st.divider()
-                st.subheader("Detailed Attempt View")
-                selected_attempt_id = st.selectbox("Select attempt to view details:", options=df_filtered['attempt_id'].tolist())
-                
-                if selected_attempt_id:
-                    selected_row = df_filtered[df_filtered['attempt_id'] == selected_attempt_id].iloc[0]
-                    st.write(f"**Attempt ID:** {selected_row['attempt_id']}")
-                    st.write(f"**Test:** {selected_row['test_title']} (ID: {selected_row['test_id']})")
-                    st.write(f"**Student:** {selected_row['name']} (Roll: {selected_row['roll_number']}, Username: {selected_row['username']})")
-                    st.write(f"**Score:** {selected_row['score']}")
-                    st.write(f"**Submitted at:** {selected_row['submitted_at']}")
+                # Detailed view (only if there are filtered attempts)
+                if not df_filtered.empty:
+                    st.divider()
+                    st.subheader("Detailed Attempt View")
+                    selected_attempt_id = st.selectbox("Select attempt to view details:", options=df_filtered['attempt_id'].tolist())
                     
-                    # Show answers in expandable section
-                    with st.expander("View Answers (JSON)"):
-                        st.code(selected_row['answers_json'], language='json')
+                    if selected_attempt_id:
+                        selected_row = df_filtered[df_filtered['attempt_id'] == selected_attempt_id].iloc[0]
+                        st.write(f"**Attempt ID:** {selected_row['attempt_id']}")
+                        st.write(f"**Test:** {selected_row.get('test_title', 'N/A')} (ID: {selected_row.get('test_id', 'N/A')})")
+                        st.write(f"**Student:** {selected_row.get('name', 'N/A')} (Roll: {selected_row.get('roll_number', 'N/A')}, Username: {selected_row.get('username', 'N/A')})")
+                        st.write(f"**Score:** {selected_row.get('score', 'N/A')}")
+                        st.write(f"**Submitted at:** {selected_row.get('submitted_at', 'N/A')}")
+                        
+                        # Show answers in expandable section
+                        with st.expander("View Answers (JSON)"):
+                            st.code(selected_row.get('answers_json', ''), language='json')
         
         elif page == "ℹ️ About":
             st.title("About This System")
