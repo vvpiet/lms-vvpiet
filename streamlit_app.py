@@ -387,6 +387,34 @@ def db_connect():
         # SQLite for local development; allow multithreaded access
         return sqlite3.connect(DB_PATH, check_same_thread=False)
 
+
+def get_table_columns(table_name):
+    """Return a list of column names for the given table in a portable way.
+
+    Uses PRAGMA for SQLite or information_schema for Postgres.
+    """
+    if DATABASE_URL:
+        conn = db_connect()
+        cur = conn.cursor()
+        try:
+            # information_schema.column_name returns lowercase names on Postgres
+            cur.execute('SELECT column_name FROM information_schema.columns WHERE table_name = %s ORDER BY ordinal_position', (table_name,))
+            rows = cur.fetchall()
+            cols = [r[0] for r in rows]
+        finally:
+            conn.close()
+        return cols
+    else:
+        conn = db_connect()
+        cur = conn.cursor()
+        try:
+            cur.execute(f"PRAGMA table_info({table_name})")
+            rows = cur.fetchall()
+            cols = [r[1] for r in rows]
+        finally:
+            conn.close()
+        return cols
+
 def init_database():
     """Initialize SQLite database with all tables."""
     conn = db_connect()
@@ -594,8 +622,7 @@ def init_database():
         conn.commit()
     
     # Ensure users table has attendance and has_access columns (for existing DBs)
-    cursor.execute("PRAGMA table_info(users)")
-    cols = [row[1] for row in cursor.fetchall()]
+    cols = get_table_columns('users')
     if 'attendance' not in cols:
         try:
             cursor.execute("ALTER TABLE users ADD COLUMN attendance INTEGER DEFAULT 0")
@@ -659,8 +686,7 @@ def init_database():
     conn.commit()
 
     # Add missing columns for older DBs (ensure q1..q10 and rating/comment fields exist)
-    cursor.execute("PRAGMA table_info(feedback)")
-    existing_cols = [r[1] for r in cursor.fetchall()]
+    existing_cols = get_table_columns('feedback')
     required_cols = {
         'student_name': 'TEXT',
         'faculty_id': 'INTEGER',
