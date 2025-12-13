@@ -445,6 +445,17 @@ def init_database():
         )
     ''')
 
+    # Optional table to map faculty to additional year levels they teach
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS faculty_year_level (
+            id INTEGER PRIMARY KEY,
+            faculty_id INTEGER NOT NULL,
+            year_level TEXT NOT NULL,
+            UNIQUE(faculty_id, year_level),
+            FOREIGN KEY(faculty_id) REFERENCES faculty(id)
+        )
+    ''')
+
     # Assignment submissions table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS assignment_submissions (
@@ -897,9 +908,12 @@ def get_faculty_year_levels(faculty_id):
     """Get all year levels a faculty teaches."""
     conn = db_connect()
     cursor = conn.cursor()
-    cursor.execute('SELECT year_level FROM faculty_year_level WHERE faculty_id = ? ORDER BY year_level', 
-                  (faculty_id,))
-    rows = cursor.fetchall()
+    try:
+        cursor.execute('SELECT year_level FROM faculty_year_level WHERE faculty_id = ? ORDER BY year_level', (faculty_id,))
+        rows = cursor.fetchall()
+    except Exception:
+        # Table might not exist or other DB issue; return empty list
+        rows = []
     conn.close()
     return [r[0] for r in rows] if rows else []
 
