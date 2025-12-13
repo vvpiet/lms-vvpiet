@@ -80,6 +80,28 @@ def create_table_postgres(pgconn, table, cols, drop_if_exists=False):
         create = sql.SQL('CREATE TABLE IF NOT EXISTS {} ({})').format(sql.Identifier(table), sql.SQL(', ').join(col_defs))
     cur.execute(create)
     pgconn.commit()
+    # If table has an integer primary key named `id`, ensure there's a sequence default on Postgres
+    try:
+        cur.execute("SELECT pg_get_serial_sequence(%s, %s)", (table, 'id'))
+        seq = cur.fetchone()[0]
+        if not seq:
+            # Create a sequence and set default nextval for id
+            seq_name = f"{table}_id_seq"
+            try:
+                cur.execute(f"CREATE SEQUENCE IF NOT EXISTS {seq_name}")
+            except Exception:
+                pass
+            try:
+                cur.execute(f"ALTER SEQUENCE {seq_name} OWNED BY {table}.id")
+            except Exception:
+                pass
+            try:
+                cur.execute(f"ALTER TABLE {table} ALTER COLUMN id SET DEFAULT nextval('{seq_name}')")
+            except Exception:
+                pass
+            pgconn.commit()
+    except Exception:
+        pass
 
 
 def copy_table(conn_sqlite, pgconn, table):
@@ -106,6 +128,35 @@ def copy_table(conn_sqlite, pgconn, table):
         pgconn.rollback()
         print(f"Error copying table '{table}': {e}")
         raise
+    finally:
+        # Ensure table id sequence exists and is synced immediately after data copy
+        try:
+            pg_cur.execute("SELECT pg_get_serial_sequence(%s, %s)", (table, 'id'))
+            seq = pg_cur.fetchone()[0]
+            if not seq:
+                seq_name = f"{table}_id_seq"
+                try:
+                    pg_cur.execute(f"CREATE SEQUENCE IF NOT EXISTS {seq_name}")
+                except Exception:
+                    pass
+                try:
+                    pg_cur.execute(f"ALTER SEQUENCE {seq_name} OWNED BY {table}.id")
+                except Exception:
+                    pass
+                try:
+                    pg_cur.execute(f"ALTER TABLE {table} ALTER COLUMN id SET DEFAULT nextval('{seq_name}')")
+                except Exception:
+                    pass
+            if seq:
+                pg_cur.execute(f"SELECT setval('{seq}', COALESCE((SELECT MAX(id) FROM {table}), 1), true)")
+            elif seq_name:
+                pg_cur.execute(f"SELECT setval('{seq_name}', COALESCE((SELECT MAX(id) FROM {table}), 1), true)")
+            pgconn.commit()
+        except Exception:
+            try:
+                pgconn.rollback()
+            except Exception:
+                pass
 
 
 def main():

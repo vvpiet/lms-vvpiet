@@ -691,14 +691,46 @@ def ensure_postgres_sequence(table_name):
     if not DATABASE_URL:
         return
     try:
+        import re
         conn = db_connect()
         cur = conn.cursor()
+        # First try to get the sequence linked to the serial column
         cur.execute("SELECT pg_get_serial_sequence(%s, %s)", (table_name, 'id'))
-        seq = cur.fetchone()[0]
+        seq = None
+        try:
+            seq = cur.fetchone()[0]
+        except Exception:
+            seq = None
+
+        if not seq:
+            # No serial sequence associated (e.g. table created without serial). Create one.
+            # Sanitize table_name to avoid accidental SQL injection risk for identifiers
+            safe_table = re.sub('[^0-9a-zA-Z_]', '', table_name)
+            seq_name = f"{safe_table}_id_seq"
+            try:
+                cur.execute(f"CREATE SEQUENCE IF NOT EXISTS {seq_name}")
+            except Exception:
+                # fall back if creation fails
+                pass
+            try:
+                cur.execute(f"ALTER SEQUENCE {seq_name} OWNED BY {safe_table}.id")
+            except Exception:
+                pass
+            try:
+                cur.execute(f"ALTER TABLE {safe_table} ALTER COLUMN id SET DEFAULT nextval('{seq_name}')")
+            except Exception:
+                pass
+            # Now set seq to created sequence name for sync below
+            seq = seq_name
+
         if seq:
             # Sync sequence to max(id) to avoid duplicates (true -> is_called)
-            cur.execute(f"SELECT setval('{seq}', COALESCE((SELECT MAX(id) FROM {table_name}), 1), true)")
-            conn.commit()
+            try:
+                cur.execute(f"SELECT setval('{seq}', COALESCE((SELECT MAX(id) FROM {table_name}), 1), true)")
+                conn.commit()
+            except Exception:
+                # ignore setval errors
+                pass
         conn.close()
     except Exception:
         try:
@@ -936,6 +968,8 @@ def add_faculty_year_level(faculty_id, year_level):
     conn = db_connect()
     cursor = conn.cursor()
     try:
+        # Ensure Postgres sequence exists and is synced for faculty_year_level
+        ensure_postgres_sequence('faculty_year_level')
         cursor.execute('INSERT INTO faculty_year_level (faculty_id, year_level) VALUES (?, ?)', 
                       (faculty_id, year_level))
         conn.commit()
@@ -995,6 +1029,7 @@ def add_faculty_resource(faculty_id, subject_id, resource_type, filename, file_p
     conn = db_connect()
     cursor = conn.cursor()
     try:
+        ensure_postgres_sequence('faculty_resources')
         cursor.execute('''
             INSERT INTO faculty_resources (faculty_id, subject_id, resource_type, filename, file_path, deadline)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -1322,6 +1357,7 @@ def save_daily_ler(faculty_id, subject_id, date_str, time_str, topic, lecture_nu
     """Save a Daily LER entry to the database."""
     conn = db_connect()
     cursor = conn.cursor()
+    ensure_postgres_sequence('daily_ler')
     cursor.execute('''INSERT INTO daily_ler (faculty_id, subject_id, date, time, topic, lecture_number, percent_syllabus, total_present, absent_roll_numbers, sign, remark)
                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', (faculty_id, subject_id, date_str, time_str, topic, str(lecture_number), percent_syllabus, total_present, absent_roll_numbers, sign, remark))
     conn.commit()
@@ -1472,6 +1508,7 @@ def create_test(faculty_id, subject_id, title, description, start_ts=None, end_t
     except Exception:
         end_ts_to_store = end_ts
 
+    ensure_postgres_sequence('tests')
     cursor.execute('''INSERT INTO tests (faculty_id, subject_id, title, description, start_ts, end_ts, proctored)
                       VALUES (?, ?, ?, ?, ?, ?, ?)''', (faculty_id, subject_id, title, description, start_ts_to_store, end_ts_to_store, 1 if proctored else 0))
     conn.commit()
@@ -1483,6 +1520,7 @@ def add_test_question(test_id, question_text, choices_list, correct_index, marks
     conn = db_connect()
     cursor = conn.cursor()
     choices_json = json.dumps(choices_list)
+    ensure_postgres_sequence('test_questions')
     cursor.execute('''INSERT INTO test_questions (test_id, question_text, choices, correct_choice, marks)
                       VALUES (?, ?, ?, ?, ?)''', (test_id, question_text, choices_json, int(correct_index), marks))
     conn.commit()
@@ -1569,6 +1607,7 @@ def submit_test_attempt(test_id, student_id, answers_dict, started_at=None, subm
         pass
 
     try:
+        ensure_postgres_sequence('test_attempts')
         cursor.execute('''INSERT INTO test_attempts (test_id, student_id, answers, score, started_at, submitted_at)
                           VALUES (?, ?, ?, ?, ?, ?)''', (test_id, student_id, answers_json, total_score, started_at, submitted_at))
         conn.commit()
@@ -1618,6 +1657,7 @@ def get_test_attempts_for_test(test_id):
 def create_notice(title, content, target_branch=None, target_class=None, created_by_role='admin', created_by_id=None):
     conn = db_connect()
     cursor = conn.cursor()
+    ensure_postgres_sequence('notices')
     cursor.execute('''INSERT INTO notices (title, content, target_branch, target_class, created_by_role, created_by_id)
                       VALUES (?, ?, ?, ?, ?, ?)''', (title, content, target_branch, target_class, created_by_role, created_by_id))
     conn.commit()
@@ -1647,6 +1687,7 @@ def get_notices(target_branch=None, target_class=None, limit=10):
 def submit_faculty_leave(faculty_id, leave_type, start_date, end_date, is_half_day=False, days_count=1, alt_faculty=None):
     conn = db_connect()
     cursor = conn.cursor()
+    ensure_postgres_sequence('faculty_leaves')
     cursor.execute('''INSERT INTO faculty_leaves (faculty_id, leave_type, start_date, end_date, is_half_day, days_count, alt_faculty)
                       VALUES (?, ?, ?, ?, ?, ?, ?)''', (faculty_id, leave_type, start_date, end_date, 1 if is_half_day else 0, days_count, alt_faculty))
     conn.commit()
@@ -1985,6 +2026,8 @@ if not st.session_state.logged_in:
                                     raise
                             
                             # Add all selected year levels to faculty_year_level table
+                            # Ensure sequence/default exists on Postgres before inserting
+                            ensure_postgres_sequence('faculty_year_level')
                             for year_level in selected_year_levels:
                                 cursor.execute('INSERT INTO faculty_year_level (faculty_id, year_level) VALUES (?, ?)',
                                              (fac_id, year_level))
