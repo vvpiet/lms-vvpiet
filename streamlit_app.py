@@ -365,6 +365,21 @@ def db_connect():
             def rowcount(self):
                 return self._cur.rowcount
 
+            @property
+            def lastrowid(self):
+                """Return last inserted id for Postgres by calling LASTVAL() on the cursor.
+
+                This mirrors sqlite3.Cursor.lastrowid for code that expects it. Returns None
+                if LASTVAL() is not available (e.g., no sequence used yet).
+                """
+                try:
+                    # Use the same cursor/connection session to fetch LASTVAL()
+                    self._cur.execute("SELECT LASTVAL()")
+                    row = self._cur.fetchone()
+                    return row[0] if row else None
+                except Exception:
+                    return None
+
         class PGConnWrapper:
             def __init__(self, conn):
                 self._conn = conn
