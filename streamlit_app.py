@@ -4231,29 +4231,29 @@ else:
             
             # Query all attempts across all tests
             st.subheader("🧪 All Test Attempts")
-              # Limit number of attempts fetched by default to avoid loading very large datasets into memory/UI
-              limit = 500
-              load_all = st.session_state.get('_load_all_attempts', False)
-              if load_all:
-                  cursor.execute('''
-                  SELECT ta.id, ta.test_id, ta.student_id, ta.answers, ta.score, ta.started_at, ta.submitted_at, 
-                      u.username, u.name, u.roll_number, t.title
-                  FROM test_attempts ta
-                  LEFT JOIN users u ON ta.student_id = u.id
-                  LEFT JOIN tests t ON ta.test_id = t.id
-                  ORDER BY ta.submitted_at DESC
-                  ''')
-              else:
-                  cursor.execute(f'''
-                  SELECT ta.id, ta.test_id, ta.student_id, ta.answers, ta.score, ta.started_at, ta.submitted_at, 
-                      u.username, u.name, u.roll_number, t.title
-                  FROM test_attempts ta
-                  LEFT JOIN users u ON ta.student_id = u.id
-                  LEFT JOIN tests t ON ta.test_id = t.id
-                  ORDER BY ta.submitted_at DESC
-                  LIMIT {limit}
-                  ''')
-              all_attempts = cursor.fetchall()
+            # Limit number of attempts fetched by default to avoid loading very large datasets into memory/UI
+            limit = 500
+            load_all = st.session_state.get('_load_all_attempts', False)
+            if load_all:
+                cursor.execute('''
+                SELECT ta.id, ta.test_id, ta.student_id, ta.answers, ta.score, ta.started_at, ta.submitted_at, 
+                    u.username, u.name, u.roll_number, t.title
+                FROM test_attempts ta
+                LEFT JOIN users u ON ta.student_id = u.id
+                LEFT JOIN tests t ON ta.test_id = t.id
+                ORDER BY ta.submitted_at DESC
+                ''')
+            else:
+                cursor.execute(f'''
+                SELECT ta.id, ta.test_id, ta.student_id, ta.answers, ta.score, ta.started_at, ta.submitted_at, 
+                    u.username, u.name, u.roll_number, t.title
+                FROM test_attempts ta
+                LEFT JOIN users u ON ta.student_id = u.id
+                LEFT JOIN tests t ON ta.test_id = t.id
+                ORDER BY ta.submitted_at DESC
+                LIMIT {limit}
+                ''')
+            all_attempts = cursor.fetchall()
             conn.close()
             
             if not all_attempts:
