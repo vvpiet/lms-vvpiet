@@ -505,6 +505,36 @@ def init_database():
     ''')
 
     conn.commit()
+    # Create useful indexes to speed up common queries (works on both SQLite and Postgres)
+    try:
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_test_attempts_submitted_at ON test_attempts(submitted_at)')
+    except Exception:
+        pass
+    try:
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_feedback_created_at ON feedback(created_at)')
+    except Exception:
+        pass
+    try:
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_subjects_year_level ON subjects(year_level)')
+    except Exception:
+        pass
+    try:
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_faculty_department ON faculty(department)')
+    except Exception:
+        pass
+    try:
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)')
+    except Exception:
+        pass
+    try:
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_ler_date ON daily_ler(date)')
+    except Exception:
+        pass
+    try:
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_attendance_date ON daily_attendance(date)')
+    except Exception:
+        pass
+    conn.commit()
 
     # Attendance tracking table (monthly)
     cursor.execute('''
@@ -894,12 +924,16 @@ def verify_login(username, password):
 
 def get_faculty_list():
     """Get all faculty members."""
-    conn = db_connect()
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, name, department, year_level FROM faculty ORDER BY name')
-    faculties = cursor.fetchall()
-    conn.close()
-    return faculties
+    @st.cache_data(ttl=300)
+    def _cached():
+        conn = db_connect()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, name, department, year_level FROM faculty ORDER BY name')
+        faculties = cursor.fetchall()
+        conn.close()
+        return faculties
+
+    return _cached()
 
 
 def get_branches():
@@ -1141,20 +1175,24 @@ def submit_feedback(student_name, faculty_id, subject_id, year_level, q1, q2, q3
 
 def get_all_feedback():
     """Get all feedback with faculty names and the specific subject feedback was about."""
-    conn = db_connect()
-    cursor = conn.cursor()
-    cursor.execute('''
-         SELECT f.id, f.created_at, fac.name, fac.department, fac.year_level, f.student_name,
-             f.q1, f.q2, f.q3, f.q4, f.q5, f.q6, f.q7, f.q8, f.q9, f.q10, f.overall_rating, f.comments,
-             COALESCE(s.name, 'Not Specified') as subject
-        FROM feedback f
-        JOIN faculty fac ON f.faculty_id = fac.id
-        LEFT JOIN subjects s ON f.subject_id = s.id
-        ORDER BY f.created_at DESC
-    ''')
-    feedbacks = cursor.fetchall()
-    conn.close()
-    return feedbacks
+    @st.cache_data(ttl=300)
+    def _cached():
+        conn = db_connect()
+        cursor = conn.cursor()
+        cursor.execute('''
+             SELECT f.id, f.created_at, fac.name, fac.department, fac.year_level, f.student_name,
+                 f.q1, f.q2, f.q3, f.q4, f.q5, f.q6, f.q7, f.q8, f.q9, f.q10, f.overall_rating, f.comments,
+                 COALESCE(s.name, 'Not Specified') as subject
+            FROM feedback f
+            JOIN faculty fac ON f.faculty_id = fac.id
+            LEFT JOIN subjects s ON f.subject_id = s.id
+            ORDER BY f.created_at DESC
+        ''')
+        feedbacks = cursor.fetchall()
+        conn.close()
+        return feedbacks
+
+    return _cached()
 
 def get_faculty_stats():
     """Get statistics by faculty."""
@@ -1186,12 +1224,16 @@ def get_db_connection():
     return db_connect()
 
 def get_all_students():
-    conn = db_connect()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, username, attendance, has_access FROM users WHERE role = 'student' ORDER BY username")
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
+    @st.cache_data(ttl=300)
+    def _cached():
+        conn = db_connect()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, username, attendance, has_access FROM users WHERE role = 'student' ORDER BY username")
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+
+    return _cached()
 
 
 def set_student_access(user_id, value):
@@ -1466,6 +1508,11 @@ def schedule_feedback(start_ts, end_ts):
     # Store ISO-8601 timezone-aware strings; start_ts/end_ts should be isoformat strings
     cursor.execute('INSERT INTO feedback_schedule (start_ts, end_ts) VALUES (?, ?)', (start_ts, end_ts))
     conn.commit()
+    # Clear cached feedback schedule and feedback lists
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
     conn.close()
 
 def get_current_feedback_schedule():
@@ -1764,12 +1811,17 @@ def get_faculty_leave_usage(faculty_id):
 
 def get_all_subjects():
     """Get all available subjects."""
-    conn = db_connect()
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, name, year_level, department, code FROM subjects ORDER BY year_level, name')
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
+    # Cached read-heavy helper
+    @st.cache_data(ttl=300)
+    def _cached():
+        conn = db_connect()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, name, year_level, department, code FROM subjects ORDER BY year_level, name')
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+
+    return _cached()
 
 
 def get_academic_year_range_for_date(dt=None):
@@ -1833,11 +1885,21 @@ def add_subject(name, year_level, department=None, code=None):
         cursor.execute('INSERT INTO subjects (name, year_level, department, code) VALUES (?, ?, ?, ?)', (name, year_level, department, code))
         conn.commit()
         sid = cursor.lastrowid if hasattr(cursor, 'lastrowid') else None
+        # Clear cached subject/faculty lists so UI reflects new data quickly
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
         conn.close()
         return sid
     except sqlite3.IntegrityError:
         # Known duplicate/constraint failure: return None so caller can show friendly message
         conn.close()
+        # Clear caches to ensure UI consistency
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
         return None
     except Exception:
         # Re-raise unexpected exceptions so callers (UI) can show the real error
@@ -2151,14 +2213,22 @@ else:
                 if recent_attempts:
                     st.success(f"✓ You have {len(recent_attempts)} attempt(s) recorded")
                     attempt_rows = []
-                    for att in recent_attempts:
-                        aid, ttid, score, started_at, submitted_at = att
+                    # Batch fetch test titles for all attempt test_ids to avoid N queries in a loop
+                    ttid_set = {att[1] for att in recent_attempts}
+                    if ttid_set:
+                        placeholders = ','.join('?' for _ in ttid_set)
                         conn = db_connect()
                         cur = conn.cursor()
-                        cur.execute('SELECT title FROM tests WHERE id = ?', (ttid,))
-                        test_title = cur.fetchone()
+                        cur.execute(f'SELECT id, title FROM tests WHERE id IN ({placeholders})', tuple(ttid_set))
+                        title_rows = cur.fetchall()
                         conn.close()
-                        test_title = test_title[0] if test_title else 'Unknown Test'
+                        title_map = {r[0]: r[1] for r in title_rows}
+                    else:
+                        title_map = {}
+
+                    for att in recent_attempts:
+                        aid, ttid, score, started_at, submitted_at = att
+                        test_title = title_map.get(ttid, 'Unknown Test')
                         attempt_rows.append({
                             'attempt_id': aid,
                             'test': test_title,
@@ -4161,15 +4231,29 @@ else:
             
             # Query all attempts across all tests
             st.subheader("🧪 All Test Attempts")
-            cursor.execute('''
-                SELECT ta.id, ta.test_id, ta.student_id, ta.answers, ta.score, ta.started_at, ta.submitted_at, 
-                       u.username, u.name, u.roll_number, t.title
-                FROM test_attempts ta
-                LEFT JOIN users u ON ta.student_id = u.id
-                LEFT JOIN tests t ON ta.test_id = t.id
-                ORDER BY ta.submitted_at DESC
-            ''')
-            all_attempts = cursor.fetchall()
+              # Limit number of attempts fetched by default to avoid loading very large datasets into memory/UI
+              limit = 500
+              load_all = st.session_state.get('_load_all_attempts', False)
+              if load_all:
+                  cursor.execute('''
+                  SELECT ta.id, ta.test_id, ta.student_id, ta.answers, ta.score, ta.started_at, ta.submitted_at, 
+                      u.username, u.name, u.roll_number, t.title
+                  FROM test_attempts ta
+                  LEFT JOIN users u ON ta.student_id = u.id
+                  LEFT JOIN tests t ON ta.test_id = t.id
+                  ORDER BY ta.submitted_at DESC
+                  ''')
+              else:
+                  cursor.execute(f'''
+                  SELECT ta.id, ta.test_id, ta.student_id, ta.answers, ta.score, ta.started_at, ta.submitted_at, 
+                      u.username, u.name, u.roll_number, t.title
+                  FROM test_attempts ta
+                  LEFT JOIN users u ON ta.student_id = u.id
+                  LEFT JOIN tests t ON ta.test_id = t.id
+                  ORDER BY ta.submitted_at DESC
+                  LIMIT {limit}
+                  ''')
+              all_attempts = cursor.fetchall()
             conn.close()
             
             if not all_attempts:
@@ -4213,6 +4297,12 @@ else:
                         st.error(f"Failed to seed demo attempt: {str(e)}")
             else:
                 st.metric("Total Attempts", len(all_attempts))
+                # Option to load all attempts (may be slow for very large datasets)
+                col_l1, col_l2 = st.columns([3,1])
+                with col_l2:
+                    if st.button("Load all attempts (may be slow)"):
+                        st.session_state['_load_all_attempts'] = True
+                        safe_rerun()
                 st.divider()
                 
                 # Build DataFrame for display
