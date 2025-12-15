@@ -705,7 +705,7 @@ def init_database():
     # If using a Postgres DB, ensure common tables have sequences and id defaults
     if DATABASE_URL:
         try:
-            for t in ['users', 'faculty', 'faculty_year_level', 'faculty_resources', 'daily_ler', 'tests', 'test_questions', 'test_attempts', 'notices', 'faculty_leaves']:
+            for t in ['users', 'faculty', 'faculty_year_level', 'faculty_resources', 'daily_ler', 'tests', 'test_questions', 'test_attempts', 'notices', 'faculty_leaves', 'subjects', 'feedback_schedule']:
                 try:
                     ensure_postgres_sequence(t)
                 except Exception:
@@ -1458,6 +1458,11 @@ def schedule_feedback(start_ts, end_ts):
     """Admin: schedule feedback availability."""
     conn = db_connect()
     cursor = conn.cursor()
+    # Ensure Postgres sequence exists for feedback_schedule when running against Postgres
+    try:
+        ensure_postgres_sequence('feedback_schedule')
+    except Exception:
+        pass
     # Store ISO-8601 timezone-aware strings; start_ts/end_ts should be isoformat strings
     cursor.execute('INSERT INTO feedback_schedule (start_ts, end_ts) VALUES (?, ?)', (start_ts, end_ts))
     conn.commit()
@@ -1819,15 +1824,25 @@ def add_subject(name, year_level, department=None, code=None):
     """Insert a new subject into the subjects table."""
     conn = db_connect()
     cursor = conn.cursor()
+    # Ensure Postgres sequence exists for subjects (no-op on SQLite)
+    try:
+        ensure_postgres_sequence('subjects')
+    except Exception:
+        pass
     try:
         cursor.execute('INSERT INTO subjects (name, year_level, department, code) VALUES (?, ?, ?, ?)', (name, year_level, department, code))
         conn.commit()
         sid = cursor.lastrowid if hasattr(cursor, 'lastrowid') else None
         conn.close()
         return sid
-    except Exception:
+    except sqlite3.IntegrityError:
+        # Known duplicate/constraint failure: return None so caller can show friendly message
         conn.close()
         return None
+    except Exception:
+        # Re-raise unexpected exceptions so callers (UI) can show the real error
+        conn.close()
+        raise
 
 def remove_subject_from_faculty(faculty_id, subject_id):
     """Remove a subject assignment from a faculty member."""
@@ -3864,12 +3879,15 @@ else:
                 if not add_subject_name or not add_branch or not add_year:
                     st.error("Please provide Subject Name, Department and Class/Year Level")
                 else:
-                    sid = add_subject(add_subject_name.strip(), add_year, add_branch.strip(), add_subject_code.strip() if add_subject_code else None)
-                    if sid:
-                        st.success(f"✓ Subject '{add_subject_name}' added (ID: {sid})")
-                        subjects = get_all_subjects()
-                    else:
-                        st.error("Error adding subject. It may already exist.")
+                    try:
+                        sid = add_subject(add_subject_name.strip(), add_year, add_branch.strip(), add_subject_code.strip() if add_subject_code else None)
+                        if sid:
+                            st.success(f"✓ Subject '{add_subject_name}' added (ID: {sid})")
+                            subjects = get_all_subjects()
+                        else:
+                            st.error("Error adding subject. It may already exist or violate a constraint.")
+                    except Exception as e:
+                        st.error(f"Error adding subject: {str(e)}")
 
             st.divider()
 

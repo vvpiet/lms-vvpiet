@@ -63,7 +63,7 @@ def check_postgres(dsn):
                 conn = psycopg2.connect(args.pg)
                 cur = conn.cursor()
                 print('\nInspect sequences for tables (pg_get_serial_sequence, seq last_value, max(id)):')
-                for t in ['users','faculty','faculty_year_level','faculty_resources','daily_ler','tests','test_questions','test_attempts','notices','faculty_leaves']:
+                for t in ['users','faculty','faculty_year_level','faculty_resources','daily_ler','tests','test_questions','test_attempts','notices','faculty_leaves','subjects','feedback_schedule']:
                     try:
                         cur.execute("SELECT pg_get_serial_sequence(%s, %s)", (t, 'id'))
                         seq = cur.fetchone()[0]
@@ -113,7 +113,7 @@ def main():
                 conn = psycopg2.connect(args.pg)
                 cur = conn.cursor()
                 print('\nSyncing sequences:')
-                for t in ['users','feedback','tests','test_attempts','subjects','faculty']:
+                for t in ['users','feedback','tests','test_attempts','subjects','faculty','feedback_schedule']:
                     try:
                         cur.execute("SELECT pg_get_serial_sequence(%s, %s)", (t, 'id'))
                         seq = cur.fetchone()[0]
